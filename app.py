@@ -4,8 +4,8 @@ import pandas as pd
 from flask import Flask, render_template, request, send_file
 from werkzeug.utils import secure_filename
 from docx import Document
+from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
-from openpyxl.styles import Font, Alignment, PatternFill
 
 app = Flask(__name__)
 app.config['UPLOAD_FOLDER'] = 'uploads'
@@ -13,66 +13,59 @@ app.config['OUTPUT_FOLDER'] = 'output'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 
-def extract_info(filepath):
+def extract_data_from_docx(filepath):
     doc = Document(filepath)
-    full_text = "\n".join([p.text for p in doc.paragraphs])
+    paragraphs = [p for p in doc.paragraphs if p.text.strip()]
 
-    # Extract date and time
-    date_match = re.search(r'(\d{4}\. gada \d{1,2}\. maijs)', full_text)
-    time_match = re.search(r'no plkst\. *(\d{1,2}:\d{2}) līdz plkst\. *(\d{1,2}:\d{2})', full_text)
-    date = date_match.group(1) if date_match else "N/A"
-    time_range = f"{time_match.group(1)}–{time_match.group(2)}" if time_match else "N/A"
-    full_date = f"{date} {time_range}"
+    # Extract date
+    date = next((re.search(r'\d{4}\. gada \d{1,2}\. [a-zāēū]+', p.text, re.IGNORECASE).group()
+                 for p in paragraphs if re.search(r'\d{4}\. gada \d{1,2}\. [a-zāēū]+', p.text, re.IGNORECASE)), "N/A")
 
-    # Extract participants and lecturers
+    # Extract time
+    time_match = next((re.search(r'no plkst\. *(\d{1,2}:\d{2}) līdz plkst\. *(\d{1,2}:\d{2})', p.text)
+                      for p in paragraphs if 'no plkst.' in p.text.lower()), None)
+    time = f"{time_match.group(1)}–{time_match.group(2)}" if time_match else "N/A"
+
+    date_time = f"{date} {time}"
+
+    # Extract participants
     participants = []
+    for p in paragraphs:
+        if re.match(r'^1\.\d+', p.text.strip()):
+            degree_match = re.search(r'^(1\.\d+\.\s+)?([A-Za-zāēūš]+)', p.text)
+            bold_run = next((run.text.strip() for run in p.runs if run.bold), "")
+            job_match = re.search(r',\s*(.+)', p.text)
+
+            if degree_match and bold_run and job_match:
+                participants.append({
+                    "degree": degree_match.group(2),
+                    "name": bold_run,
+                    "job": job_match.group(1)
+                })
+
+    # Extract lecturers
     lecturers = []
-    collecting_lecturers = False
+    collect = False
+    for p in paragraphs:
+        if "Mācību semināru vadīs" in p.text:
+            collect = True
+        elif collect and any(run.bold for run in p.runs):
+            name = next((run.text.strip() for run in p.runs if run.bold), "")
+            job = p.text.replace(name, "").replace(",", "").strip()
+            if name:
+                lecturers.append({
+                    "name": name,
+                    "job": job
+                })
 
-    for para in doc.paragraphs:
-        degree = ""
-        name = ""
-        job = ""
-        bold_runs = [run for run in para.runs if run.bold]
-        if bold_runs:
-            # Combine all bold parts
-            bold_text = " ".join([run.text.strip() for run in para.runs if run.bold]).strip()
-            match = re.match(r'([A-ZĒĪĀŪČĻŅŠŽ][a-zēīāūčļņšž]+)\s+([A-ZĒĪĀŪČĻŅŠŽ][a-zēīāūčļņšž]+\s+[A-ZĒĪĀŪČĻŅŠŽ][a-zēīāūčļņšž]+)', bold_text)
-            if match:
-                # Lecturer
-                name = f"{match.group(2).strip()},{match.group(1).strip()}"
-                job = ""
-                collecting_lecturers = True
-            else:
-                # Participant: degree + name
-                parts = bold_text.split()
-                if len(parts) >= 2:
-                    degree = parts[0]
-                    name = " ".join(parts[1:])
-                    job = ""
-                    collecting_lecturers = False
-        else:
-            # Add job description to last person
-            job = para.text.strip()
+    return date_time, participants, lecturers
 
-        if name:
-            if collecting_lecturers:
-                lecturers.append({"name": name, "job": job})
-            else:
-                participants.append({"degree": degree, "name": name, "job": job})
-        elif job:
-            if collecting_lecturers and lecturers:
-                lecturers[-1]["job"] += " " + job
-            elif not collecting_lecturers and participants:
-                participants[-1]["job"] += " " + job
-
-    # Prepare dataframe
-    max_len = max(len(participants), len(lecturers))
+def save_to_excel(date_time, participants, lecturers, output_path):
     rows = []
-
+    max_len = max(len(participants), len(lecturers))
     for i in range(max_len):
         rows.append({
-            "Date": full_date if i == 0 else "",
+            "Date": date_time if i == 0 else "",
             "Degree": participants[i]["degree"] if i < len(participants) else "",
             "Participant": participants[i]["name"] if i < len(participants) else "",
             "Participant Job": participants[i]["job"] if i < len(participants) else "",
@@ -80,45 +73,44 @@ def extract_info(filepath):
             "Lecturer Job": lecturers[i]["job"] if i < len(lecturers) else ""
         })
 
-    return pd.DataFrame(rows)
-
-def save_to_excel(df, output_path):
+    df = pd.DataFrame(rows)
     with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name="Seminar Info")
-        ws = writer.sheets["Seminar Info"]
+        df.to_excel(writer, index=False, sheet_name='Seminar Info')
+        ws = writer.sheets['Seminar Info']
 
-        # Style headers
         header_font = Font(bold=True, color="FFFFFF")
-        header_fill = PatternFill("solid", fgColor="4F81BD")
-        alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        fill = PatternFill("solid", fgColor="4F81BD")
+        align = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
         for cell in ws[1]:
             cell.font = header_font
-            cell.fill = header_fill
-            cell.alignment = alignment
+            cell.fill = fill
+            cell.alignment = align
 
-        # Auto-adjust column widths
-        for i, column in enumerate(df.columns, 1):
-            max_length = max(df[column].astype(str).map(len).max(), len(column)) + 2
-            ws.column_dimensions[get_column_letter(i)].width = max_length
+        for col in ws.columns:
+            max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col) + 2
+            col_letter = get_column_letter(col[0].column)
+            ws.column_dimensions[col_letter].width = max_length
 
-@app.route('/', methods=['GET', 'POST'])
+@app.route("/", methods=["GET", "POST"])
 def index():
-    if request.method == 'POST':
-        f = request.files['file']
-        if not f:
-            return render_template('index.html', error="No file selected.")
-        filename = secure_filename(f.filename)
-        filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        f.save(filepath)
+    if request.method == "POST":
+        uploaded_file = request.files['file']
+        if not uploaded_file or not uploaded_file.filename.endswith(".docx"):
+            return render_template("index.html", error="Please upload a valid .docx file.")
 
-        df = extract_info(filepath)
+        filename = secure_filename(uploaded_file.filename)
+        docx_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        uploaded_file.save(docx_path)
+
+        date_time, participants, lecturers = extract_data_from_docx(docx_path)
         output_path = os.path.join(app.config['OUTPUT_FOLDER'], filename.replace(".docx", ".xlsx"))
-        save_to_excel(df, output_path)
+        save_to_excel(date_time, participants, lecturers, output_path)
+
         return send_file(output_path, as_attachment=True)
 
-    return render_template('index.html')
-
+    return render_template("index.html")
+    
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=port)
