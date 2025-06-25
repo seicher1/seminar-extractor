@@ -15,45 +15,69 @@ os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 
 def extract_info(filepath):
     doc = Document(filepath)
-    text = "\n".join([para.text for para in doc.paragraphs])
+    full_text = "\n".join([p.text for p in doc.paragraphs])
 
-    date_match = re.search(r'(\d{4}\. gada \d{1,2}\. maijs)', text)
-    time_match = re.search(r'no plkst\. *(\d{1,2}:\d{2}) līdz plkst\. *(\d{1,2}:\d{2})', text)
+    # Extract date and time
+    date_match = re.search(r'(\d{4}\. gada \d{1,2}\. maijs)', full_text)
+    time_match = re.search(r'no plkst\. *(\d{1,2}:\d{2}) līdz plkst\. *(\d{1,2}:\d{2})', full_text)
     date = date_match.group(1) if date_match else "N/A"
     time_range = f"{time_match.group(1)}–{time_match.group(2)}" if time_match else "N/A"
     full_date = f"{date} {time_range}"
 
-    # Participants
-    participants_block = re.search(r'deleģētas šādas Valsts policijas amatpersonas:(.*?)Mācību semināru vadīs', text, re.DOTALL)
-    participants, participant_jobs = [], []
-    if participants_block:
-        lines = participants_block.group(1).split('\n')
-        for line in lines:
-            match = re.search(r'majore\s+([A-ZĒĪĀŪČĻŅŠŽ][a-zēīāūčļņšž]+\s+[A-ZĒĪĀŪČĻŅŠŽ][a-zēīāūčļņšž]+),\s+(.*)', line.strip())
-            if match:
-                participants.append(match.group(1).strip().title())
-                participant_jobs.append(match.group(2).strip())
+    # Extract participants and lecturers
+    participants = []
+    lecturers = []
+    collecting_lecturers = False
 
-    # Lecturers
-    lecturers_block = re.search(r'Mācību semināru vadīs\s*-\s*(.*?)(?=Nepieciešamā informācija|$)', text, re.DOTALL)
-    lecturers, lecturer_jobs = [], []
-    if lecturers_block:
-        parts = lecturers_block.group(1).split("un")
-        for part in parts:
-            match = re.search(r'([A-ZĒĪĀŪČĻŅŠŽ][a-zēīāūčļņšž]+)\s+([A-ZĒĪĀŪČĻŅŠŽ][a-zēīāūčļņšž]+),\s*(.*)', part.strip().strip("."))
+    for para in doc.paragraphs:
+        degree = ""
+        name = ""
+        job = ""
+        bold_runs = [run for run in para.runs if run.bold]
+        if bold_runs:
+            # Combine all bold parts
+            bold_text = " ".join([run.text.strip() for run in para.runs if run.bold]).strip()
+            match = re.match(r'([A-ZĒĪĀŪČĻŅŠŽ][a-zēīāūčļņšž]+)\s+([A-ZĒĪĀŪČĻŅŠŽ][a-zēīāūčļņšž]+\s+[A-ZĒĪĀŪČĻŅŠŽ][a-zēīāūčļņšž]+)', bold_text)
             if match:
-                lecturers.append(f"{match.group(2)},{match.group(1)}")
-                lecturer_jobs.append(match.group(3).strip())
+                # Lecturer
+                name = f"{match.group(2).strip()},{match.group(1).strip()}"
+                job = ""
+                collecting_lecturers = True
+            else:
+                # Participant: degree + name
+                parts = bold_text.split()
+                if len(parts) >= 2:
+                    degree = parts[0]
+                    name = " ".join(parts[1:])
+                    job = ""
+                    collecting_lecturers = False
+        else:
+            # Add job description to last person
+            job = para.text.strip()
 
+        if name:
+            if collecting_lecturers:
+                lecturers.append({"name": name, "job": job})
+            else:
+                participants.append({"degree": degree, "name": name, "job": job})
+        elif job:
+            if collecting_lecturers and lecturers:
+                lecturers[-1]["job"] += " " + job
+            elif not collecting_lecturers and participants:
+                participants[-1]["job"] += " " + job
+
+    # Prepare dataframe
     max_len = max(len(participants), len(lecturers))
     rows = []
+
     for i in range(max_len):
         rows.append({
             "Date": full_date if i == 0 else "",
-            "Participant": participants[i] if i < len(participants) else "",
-            "Participant Job": participant_jobs[i] if i < len(participant_jobs) else "",
-            "Lecturer": lecturers[i] if i < len(lecturers) else "",
-            "Lecturer Job": lecturer_jobs[i] if i < len(lecturer_jobs) else ""
+            "Degree": participants[i]["degree"] if i < len(participants) else "",
+            "Participant": participants[i]["name"] if i < len(participants) else "",
+            "Participant Job": participants[i]["job"] if i < len(participants) else "",
+            "Lecturer": lecturers[i]["name"] if i < len(lecturers) else "",
+            "Lecturer Job": lecturers[i]["job"] if i < len(lecturers) else ""
         })
 
     return pd.DataFrame(rows)
