@@ -47,13 +47,13 @@
   </div>
 
   <!-- Drag and Drop Zone -->
-  <div id="drop-zone" class="mb-3">
-    <p>🐾 Drag & Drop your <code>.docx</code> file here or click to upload</p>
-    <input type="file" name="file" id="file-input" accept=".docx" style="display:none;" />
+  <div id="drop-zone" class="mb-4">
+    <p>🐾 Drag & Drop your <code>.docx</code> file here or click to upload (for preview only)</p>
+    <input type="file" name="fake-file" id="file-input" accept=".docx" style="display:none;" />
   </div>
 
   <!-- Preview Table -->
-  <div id="preview-table" class="table-responsive mt-4" style="display: none;">
+  <div id="preview-table" class="table-responsive" style="display: none;">
     <h5 class="text-info">Preview:</h5>
     <table class="table table-dark table-bordered" id="data-table">
       <thead class="table-primary">
@@ -68,11 +68,16 @@
       </thead>
       <tbody></tbody>
     </table>
-    <form method="POST" enctype="multipart/form-data">
-      <input type="hidden" name="file" id="real-file-upload" />
-      <button type="submit" class="btn btn-success mt-3 w-100">📥 Download Excel File</button>
-    </form>
   </div>
+
+  <!-- REAL Submission Form -->
+  <form method="POST" enctype="multipart/form-data" class="card p-4 shadow-sm bg-dark">
+    <div class="mb-3">
+      <label for="file" class="form-label text-white">Select your seminar .docx file for Excel export:</label>
+      <input type="file" name="file" class="form-control" accept=".docx" required>
+    </div>
+    <button type="submit" class="btn btn-success w-100">📥 Extract & Download Excel</button>
+  </form>
 </div>
 
 <footer>
@@ -112,13 +117,13 @@
       return;
     }
 
-    // Fake preview for now (replace with actual preview if you want to load file client-side)
+    // 🐱 Dummy preview (static example row, replace with real preview logic if needed)
     preview.style.display = "block";
     table.innerHTML = `
       <tr><td>2025. gada 21. maijs 9:30–17:30</td>
           <td>majore</td>
           <td>Jana Ozola</td>
-          <td>Valsts policijas Galvenās kriminālpolicijas...</td>
+          <td>Valsts policijas Galvenās kriminālpolicijas pārvalde</td>
           <td>Gavariņa, Daiga</td>
           <td>Organizētās noziedzības un citu nozaru specializētās prokuratūras prokurore</td></tr>
     `;
