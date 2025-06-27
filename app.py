@@ -13,6 +13,9 @@ app.config['OUTPUT_FOLDER'] = 'output'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 
+import re
+from docx import Document
+
 def extract_data_from_docx(filepath):
     doc = Document(filepath)
     paragraphs = [p for p in doc.paragraphs if p.text.strip()]
@@ -27,51 +30,71 @@ def extract_data_from_docx(filepath):
     time_match = next((re.search(time_regex, p.text)
                        for p in paragraphs if re.search(time_regex, p.text)), None)
     time = f"{time_match.group(1)}–{time_match.group(2)}" if time_match else "N/A"
-
     full_datetime = f"{date} {time}"
 
     # === 🧍 Participants ===
-    participants = []
-    for p in paragraphs:
-        text = p.text.strip()
-        if text.lower().startswith(("majore", "inspektors", "kapteinis")):
-            degree_match = re.match(r'^(\w+)', text)
-            bold_name = next((run.text.strip() for run in p.runs if run.bold and run.text.strip()), "")
-            job = text.split(",", 1)[-1].strip() if "," in text else ""
+    participant_paragraphs = []
+    start_collecting = False
 
-            participants.append({
-                "degree": degree_match.group(1) if degree_match else "",
-                "name": bold_name,
-                "job": job
-            })
+    for p in paragraphs:
+        if "Uz mācību semināriem" in p.text:
+            start_collecting = True
+            continue
+        if "Mācību semināru vadīs" in p.text:
+            break
+        if start_collecting:
+            participant_paragraphs.append(p)
+
+    # Flatten all participant paragraphs into lines
+    all_lines = "\n".join(p.text for p in participant_paragraphs).splitlines()
+    participants = []
+    for line in all_lines:
+        line = line.strip()
+        if not line or not re.match(r'^(majore|virsleitnants|inspektors|seržants|kapteinis)\b', line, re.IGNORECASE):
+            continue
+
+        degree = re.match(r'^(\w+)', line).group(1)
+        # Try to find name from bold, fallback to regex
+        name = ""
+        for p in participant_paragraphs:
+            if line in p.text:
+                bolds = [run.text.strip() for run in p.runs if run.bold and run.text.strip()]
+                if bolds:
+                    name = " ".join(bolds)
+                break
+
+        if not name:
+            name_match = re.search(r'\b([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+(?:[-\s][A-ZĀČĒĢĪĶĻŅŖŠŪŽ]?[a-zāčēģīķļņŗšūž]+)+)', line)
+            name = name_match.group(1) if name_match else "N/A"
+
+        job = line.replace(degree, "").replace(name, "").strip("– ,")
+
+        participants.append({
+            "degree": degree,
+            "name": name,
+            "job": job
+        })
 
     # === 👩‍🏫 Lecturers ===
     lecturers = []
     for p in paragraphs:
         if "Mācību semināru vadīs" in p.text:
-            raw_line = p.text.split("Mācību semināru vadīs", 1)[-1]
-            entries = re.split(r'un|,', raw_line)
-            for entry in entries:
-                text = entry.strip().strip("-")
-                if not text:
-                    continue
-
-                # Attempt name match, fallback to full text as job if no name
-                name_match = re.search(r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+)', text)
+            line = p.text.split("Mācību semināru vadīs", 1)[-1].strip("–: ")
+            segments = re.split(r'un|,', line)
+            for seg in segments:
+                seg = seg.strip()
+                name_match = re.search(r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+)', seg)
                 if name_match:
                     name = name_match.group(1)
-                    job = text.replace(name, "").strip(", ")
+                    job = seg.replace(name, "").strip(", ")
                 else:
                     name = "—"
-                    job = text
-
-                lecturers.append({
-                    "name": name,
-                    "job": job
-                })
+                    job = seg
+                lecturers.append({"name": name, "job": job})
             break
 
     return full_datetime, participants, lecturers
+
 
 def save_to_excel(date_time, participants, lecturers, output_path):
     rows = []
