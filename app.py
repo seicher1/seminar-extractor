@@ -71,12 +71,12 @@ def save_to_excel(date_time, participants, lecturers, output_path):
     max_len = max(len(participants), len(lecturers))
     for i in range(max_len):
         rows.append({
-            "Date": date_time if i == 0 else "",
-            "Degree": participants[i]["degree"] if i < len(participants) else "",
-            "Participant": participants[i]["name"] if i < len(participants) else "",
-            "Participant Job": participants[i]["job"] if i < len(participants) else "",
-            "Lecturer": lecturers[i]["name"] if i < len(lecturers) else "",
-            "Lecturer Job": lecturers[i]["job"] if i < len(lecturers) else ""
+            "Datums un laiks": date_time if i == 0 else "",
+            "Pakāpe": participants[i]["degree"] if i < len(participants) else "",
+            "Dalībnieks": participants[i]["name"] if i < len(participants) else "",
+            "Amats": participants[i]["job"] if i < len(participants) else "",
+            "Semināra vadītājs": lecturers[i]["name"] if i < len(lecturers) else "",
+            "Amats": lecturers[i]["job"] if i < len(lecturers) else ""
         })
 
     df = pd.DataFrame(rows)
