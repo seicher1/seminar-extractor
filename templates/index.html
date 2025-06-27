@@ -1,11 +1,11 @@
 <!doctype html>
-<html lang="en">
+<html lang="lv">
 <head>
   <meta charset="UTF-8">
-  <title>Seminar Extractor - Meow Meow Industries</title>
+  <title>Semināru Datu Ekstraktors – Meow Meow Industries</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
 
-  <!-- Bootstrap Dark Theme -->
+  <!-- Bootstrap -->
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <style>
     body {
@@ -19,17 +19,6 @@
     table {
       color: #fff;
     }
-    #drop-zone {
-      border: 2px dashed #4f81bd;
-      padding: 30px;
-      text-align: center;
-      color: #4f81bd;
-      cursor: pointer;
-      border-radius: 10px;
-    }
-    #drop-zone.hover {
-      background-color: #222;
-    }
     footer {
       margin-top: 3rem;
       text-align: center;
@@ -42,93 +31,23 @@
 
 <div class="container py-5">
   <div class="text-center mb-4">
-    <h1 class="display-6">📄 Seminar Extractor</h1>
-    <p class="lead">Upload your <code>.docx</code> seminar file and preview before export ✨</p>
+    <h1 class="display-6">📄 Semināru Datu Ekstraktors</h1>
+    <p class="lead">Augšupielādē <code>.docx</code> failu un eksportē uz Excel ✨</p>
   </div>
 
-  <!-- Drag and Drop Zone -->
-  <div id="drop-zone" class="mb-4">
-    <p>🐾 Drag & Drop your <code>.docx</code> file here or click to upload (for preview only)</p>
-    <input type="file" name="fake-file" id="file-input" accept=".docx" style="display:none;" />
-  </div>
-
-  <!-- Preview Table -->
-  <div id="preview-table" class="table-responsive" style="display: none;">
-    <h5 class="text-info">Preview:</h5>
-    <table class="table table-dark table-bordered" id="data-table">
-      <thead class="table-primary">
-        <tr>
-          <th>Date</th>
-          <th>Degree</th>
-          <th>Participant</th>
-          <th>Participant Job</th>
-          <th>Lecturer</th>
-          <th>Lecturer Job</th>
-        </tr>
-      </thead>
-      <tbody></tbody>
-    </table>
-  </div>
-
-  <!-- REAL Submission Form -->
+  <!-- Real Submission -->
   <form method="POST" enctype="multipart/form-data" class="card p-4 shadow-sm bg-dark">
     <div class="mb-3">
-      <label for="file" class="form-label text-white">Select your seminar .docx file for Excel export:</label>
+      <label for="file" class="form-label text-white">Izvēlies savu <code>.docx</code> failu:</label>
       <input type="file" name="file" class="form-control" accept=".docx" required>
     </div>
-    <button type="submit" class="btn btn-success w-100">📥 Extract & Download Excel</button>
+    <button type="submit" class="btn btn-success w-100">📥 Izvilkt & Lejupielādēt Excel</button>
   </form>
 </div>
 
 <footer>
   Meow Meow Industries 2025 🐱🐾
 </footer>
-
-<script>
-  const dropZone = document.getElementById("drop-zone");
-  const fileInput = document.getElementById("file-input");
-  const table = document.getElementById("data-table").querySelector("tbody");
-  const preview = document.getElementById("preview-table");
-
-  dropZone.addEventListener("click", () => fileInput.click());
-
-  dropZone.addEventListener("dragover", e => {
-    e.preventDefault();
-    dropZone.classList.add("hover");
-  });
-
-  dropZone.addEventListener("dragleave", () => dropZone.classList.remove("hover"));
-
-  dropZone.addEventListener("drop", e => {
-    e.preventDefault();
-    dropZone.classList.remove("hover");
-    const file = e.dataTransfer.files[0];
-    handleFile(file);
-  });
-
-  fileInput.addEventListener("change", () => {
-    const file = fileInput.files[0];
-    handleFile(file);
-  });
-
-  function handleFile(file) {
-    if (!file || !file.name.endsWith(".docx")) {
-      alert("Please upload a valid .docx file");
-      return;
-    }
-
-    // 🐱 Dummy preview (static example row, replace with real preview logic if needed)
-    preview.style.display = "block";
-    table.innerHTML = `
-      <tr><td>2025. gada 21. maijs 9:30–17:30</td>
-          <td>majore</td>
-          <td>Jana Ozola</td>
-          <td>Valsts policijas Galvenās kriminālpolicijas pārvalde</td>
-          <td>Gavariņa, Daiga</td>
-          <td>Organizētās noziedzības un citu nozaru specializētās prokuratūras prokurore</td></tr>
-    `;
-  }
-</script>
 
 </body>
 </html>
