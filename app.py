@@ -17,10 +17,10 @@ def extract_data_from_docx(filepath):
     doc = Document(filepath)
     paragraphs = [p for p in doc.paragraphs if p.text.strip()]
 
-    # === 📅 Extract Date & Time ===
+    # === 📅 Date & Time ===
     date_regex = r'202\d\. gada \d{1,2}\. [a-zāēūī]+'
-    time_regex = r'no plkst\. *(\d{1,2}:\d{2}) līdz plkst\. *(\d{1,2}:\d{2})'
-    
+    time_regex = r'no plkst\.?\s*(\d{1,2}[:.]\d{2})\s*(?:līdz|–)\s*plkst\.?\s*(\d{1,2}[:.]\d{2})'
+
     date = next((re.search(date_regex, p.text).group()
                  for p in paragraphs if re.search(date_regex, p.text)), "N/A")
 
@@ -49,20 +49,27 @@ def extract_data_from_docx(filepath):
     lecturers = []
     for p in paragraphs:
         if "Mācību semināru vadīs" in p.text:
-            # Grab the entire paragraph
-            lecturer_line = p.text.split("Mācību semināru vadīs -", 1)[-1]
-            lecturer_segments = [seg.strip() for seg in lecturer_line.split("un")]
+            raw_line = p.text.split("Mācību semināru vadīs", 1)[-1]
+            entries = re.split(r'un|,', raw_line)
+            for entry in entries:
+                text = entry.strip().strip("-")
+                if not text:
+                    continue
 
-            for segment in lecturer_segments:
-                name_match = re.search(r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+)', segment)
-                name = name_match.group(1) if name_match else "N/A"
-                job = segment.replace(name, "").replace(",", "").strip() if name != "N/A" else segment.strip()
+                # Attempt name match, fallback to full text as job if no name
+                name_match = re.search(r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+)', text)
+                if name_match:
+                    name = name_match.group(1)
+                    job = text.replace(name, "").strip(", ")
+                else:
+                    name = "—"
+                    job = text
 
                 lecturers.append({
                     "name": name,
                     "job": job
                 })
-            break  # Only one line of lecturers expected
+            break
 
     return full_datetime, participants, lecturers
 
