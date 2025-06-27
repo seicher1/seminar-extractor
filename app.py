@@ -13,62 +13,46 @@ app.config['OUTPUT_FOLDER'] = 'output'
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 
-import re
-from docx import Document
-
 def extract_data_from_docx(filepath):
     doc = Document(filepath)
-    paragraphs = [p for p in doc.paragraphs if p.text.strip()]
+    paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
 
     # === 📅 Date & Time ===
     date_regex = r'202\d\. gada \d{1,2}\. [a-zāēūī]+'
     time_regex = r'no plkst\.?\s*(\d{1,2}[:.]\d{2})\s*(?:līdz|–)\s*plkst\.?\s*(\d{1,2}[:.]\d{2})'
 
-    date = next((re.search(date_regex, p.text).group()
-                 for p in paragraphs if re.search(date_regex, p.text)), "N/A")
-
-    time_match = next((re.search(time_regex, p.text)
-                       for p in paragraphs if re.search(time_regex, p.text)), None)
+    date = next((re.search(date_regex, p).group() for p in paragraphs if re.search(date_regex, p)), "N/A")
+    time_match = next((re.search(time_regex, p) for p in paragraphs if re.search(time_regex, p)), None)
     time = f"{time_match.group(1)}–{time_match.group(2)}" if time_match else "N/A"
     full_datetime = f"{date} {time}"
 
-    # === 🧍 Participants ===
-    participant_paragraphs = []
-    start_collecting = False
-
-    for p in paragraphs:
-        if "Uz mācību semināriem" in p.text:
-            start_collecting = True
-            continue
-        if "Mācību semināru vadīs" in p.text:
-            break
-        if start_collecting:
-            participant_paragraphs.append(p)
-
-    # Flatten all participant paragraphs into lines
-    all_lines = "\n".join(p.text for p in participant_paragraphs).splitlines()
+    # === 🧍‍♀️ Participants ===
     participants = []
-    for line in all_lines:
-        line = line.strip()
-        if not line or not re.match(r'^(majore|virsleitnants|inspektors|seržants|kapteinis)\b', line, re.IGNORECASE):
-            continue
+    degree_keywords = r"(majore|virsleitnants|kapteinis|inspektors|seržants|leitnants|virsseržants)"
 
-        degree = re.match(r'^(\w+)', line).group(1)
-        # Try to find name from bold, fallback to regex
-        name = ""
-        for p in participant_paragraphs:
-            if line in p.text:
-                bolds = [run.text.strip() for run in p.runs if run.bold and run.text.strip()]
-                if bolds:
-                    name = " ".join(bolds)
-                break
+    # Find index range of participants block
+    start_idx = end_idx = None
+    for i, p in enumerate(paragraphs):
+        if "Uz mācību semināriem" in p:
+            start_idx = i + 1
+        if "Mācību semināru vadīs" in p:
+            end_idx = i
+            break
 
-        if not name:
-            name_match = re.search(r'\b([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+(?:[-\s][A-ZĀČĒĢĪĶĻŅŖŠŪŽ]?[a-zāčēģīķļņŗšūž]+)+)', line)
-            name = name_match.group(1) if name_match else "N/A"
+    if start_idx is None or end_idx is None:
+        return full_datetime, [], []
 
-        job = line.replace(degree, "").replace(name, "").strip("– ,")
+    # Combine all participant lines into one text blob
+    participant_blob = " ".join(paragraphs[start_idx:end_idx])
 
+    # Match each participant line
+    pattern = rf"\b{degree_keywords}\b\s+([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][^\s,–]+(?:[- ][A-ZĀČĒĢĪĶĻŅŖŠŪŽ]?[^\s,–]+)*)[,–]\s*(.*?)(?:[;.](?=\s*\b{degree_keywords}\b)|$)"
+    matches = re.finditer(pattern, participant_blob, re.IGNORECASE)
+
+    for m in matches:
+        degree = m.group(1).strip()
+        name = m.group(2).strip()
+        job = m.group(3).strip(" ,;.")
         participants.append({
             "degree": degree,
             "name": name,
@@ -78,19 +62,22 @@ def extract_data_from_docx(filepath):
     # === 👩‍🏫 Lecturers ===
     lecturers = []
     for p in paragraphs:
-        if "Mācību semināru vadīs" in p.text:
-            line = p.text.split("Mācību semināru vadīs", 1)[-1].strip("–: ")
-            segments = re.split(r'un|,', line)
-            for seg in segments:
-                seg = seg.strip()
-                name_match = re.search(r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+)', seg)
+        if "Mācību semināru vadīs" in p:
+            line = p.split("Mācību semināru vadīs", 1)[-1].strip("–: ")
+            entries = re.split(r'un|,', line)
+            for entry in entries:
+                text = entry.strip()
+                name_match = re.search(r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+)', text)
                 if name_match:
                     name = name_match.group(1)
-                    job = seg.replace(name, "").strip(", ")
+                    job = text.replace(name, "").strip(", ")
                 else:
                     name = "—"
-                    job = seg
-                lecturers.append({"name": name, "job": job})
+                    job = text
+                lecturers.append({
+                    "name": name,
+                    "job": job
+                })
             break
 
     return full_datetime, participants, lecturers
