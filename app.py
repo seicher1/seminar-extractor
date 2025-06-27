@@ -9,7 +9,7 @@ from openpyxl.utils import get_column_letter
 app = Flask(__name__)
 
 def extract_data(doc):
-    # iznem datumu un laiku no 6. rindkopas (es nezinu ka sito salabot bet vins strada so)
+    # 1) datums un laiks no 6. rindkopas (it just works for some reason) (es velak uzlabosu)
     date_para = doc.paragraphs[6].text.strip()
     date_match = re.search(r'202\d\. gada \d{1,2}\. [a-zāēūī]+', date_para)
     time_match = re.search(
@@ -20,36 +20,44 @@ def extract_data(doc):
     time = f"{time_match.group(1)}–{time_match.group(2)}" if time_match else "N/A"
     full_dt = f"{date} {time}"
 
-    # 2) vinam basically butu jaiet ta, ka vins nem no pirma punkta, es hz bet sitais labak iet
-    participants = []
-    for para in doc.paragraphs[10:]:
-        text = para.text.strip()
-        if not text:
-            continue
-
-        # vins panem bold vardu uzvardu un ieliek vinu excel
-        bolds, buf = [], ""
-        for run in para.runs:
-            if run.bold:
-                buf += run.text
-            elif buf:
-                bolds.append(buf.strip())
-                buf = ""
-        if buf:
-            bolds.append(buf.strip())
-
-        # sadala ar semikolu
-        segs = [s.strip() for s in text.split(";") if s.strip()]
-        for i, seg in enumerate(segs):
-            deg = seg.split()[0] if seg.split() else "N/A"
-            name = bolds[i] if i < len(bolds) else "N/A"
-            job = seg.split(f"{name},",1)[-1].strip(" .") if f"{name}," in seg else "N/A"
-            participants.append({"degree": deg, "participant": name, "pjob": job})
-
-        if text.endswith("."):
+    # atrod vardu delegetas un sak meklet dalibniekus no turienes
+    start_idx = None
+    for i, para in enumerate(doc.paragraphs):
+        if "deleģētas" in para.text:
+            start_idx = i + 1
             break
 
-    # lektoru meklesana
+    participants = []
+    if start_idx is not None:
+        # vakt datus kamer apstajas pie lektoriem
+        for para in doc.paragraphs[start_idx:]:
+            text = para.text.strip()
+            if not text:
+                continue
+            # apstaties pie lektoriem
+            if "Mācību semināru vadīs" in text:
+                break
+
+            # bold to normal
+            bolds, buf = [], ""
+            for run in para.runs:
+                if run.bold:
+                    buf += run.text
+                elif buf:
+                    bolds.append(buf.strip())
+                    buf = ""
+            if buf:
+                bolds.append(buf.strip())
+
+            # sadala semikolus ta lai vnk labak
+            segs = [s.strip() for s in re.split(r';', text) if s.strip()]
+            for i, seg in enumerate(segs):
+                deg = seg.split()[0] if seg.split() else "N/A"
+                name = bolds[i] if i < len(bolds) else "N/A"
+                job = seg.split(f"{name},",1)[-1].strip(" .") if f"{name}," in seg else "N/A"
+                participants.append({"degree": deg, "participant": name, "pjob": job})
+
+    # lektori time
     lecturers = []
     for para in doc.paragraphs:
         if "Mācību semināru vadīs" in para.text:
@@ -70,7 +78,7 @@ def extract_data(doc):
                 lecturers.append({"lecturer": nm, "ljob": jb})
             break
 
-    # saliek rindinas un kolonnas
+    # uztaisa kolonnas un rindinas prieks excel
     rows = []
     max_len = max(len(participants), len(lecturers))
     for i in range(max_len):
@@ -98,17 +106,13 @@ def upload():
     doc = Document(f)
     df = extract_data(doc)
 
-    # uzliek fully stretched lowkey
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Data')
         ws = writer.sheets['Data']
         for idx, col in enumerate(df.columns, 1):
-            max_length = max(
-                df[col].astype(str).map(len).max(),
-                len(col)
-            ) + 2
-            ws.column_dimensions[get_column_letter(idx)].width = max_length
+            max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
+            ws.column_dimensions[get_column_letter(idx)].width = max_len
     out.seek(0)
 
     return send_file(
@@ -117,7 +121,7 @@ def upload():
         as_attachment=True,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-# lai ietu render aplikacija, kad serveri palaizu
+#prieks render
 if __name__ == '__main__':
     app.run(
         host='0.0.0.0',
