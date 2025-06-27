@@ -17,57 +17,52 @@ def extract_data_from_docx(filepath):
     doc = Document(filepath)
     paragraphs = [p for p in doc.paragraphs if p.text.strip()]
 
-    # === 📅 Date + Time ===
-    date_pattern = r'202\d\. gada \d{1,2}\. [a-zāēūī]+'
-    time_pattern = r'no plkst\. *(\d{1,2}:\d{2}) līdz plkst\. *(\d{1,2}:\d{2})'
+    # === 📅 Extract Date & Time ===
+    date_regex = r'202\d\. gada \d{1,2}\. [a-zāēūī]+'
+    time_regex = r'no plkst\. *(\d{1,2}:\d{2}) līdz plkst\. *(\d{1,2}:\d{2})'
     
-    date = next((re.search(date_pattern, p.text, re.IGNORECASE).group()
-                 for p in paragraphs if re.search(date_pattern, p.text, re.IGNORECASE)), "N/A")
+    date = next((re.search(date_regex, p.text).group()
+                 for p in paragraphs if re.search(date_regex, p.text)), "N/A")
 
-    time_match = next((re.search(time_pattern, p.text)
-                       for p in paragraphs if re.search(time_pattern, p.text)), None)
-    
+    time_match = next((re.search(time_regex, p.text)
+                       for p in paragraphs if re.search(time_regex, p.text)), None)
     time = f"{time_match.group(1)}–{time_match.group(2)}" if time_match else "N/A"
+
     full_datetime = f"{date} {time}"
 
     # === 🧍 Participants ===
     participants = []
     for p in paragraphs:
-        if re.match(r'^1\.\d+\.', p.text.strip()):
-            degree_match = re.match(r'^1\.\d+\.\s+(\w+)', p.text.strip())
-            degree = degree_match.group(1) if degree_match else ""
-
+        text = p.text.strip()
+        if text.lower().startswith(("majore", "inspektors", "kapteinis")):
+            degree_match = re.match(r'^(\w+)', text)
             bold_name = next((run.text.strip() for run in p.runs if run.bold and run.text.strip()), "")
-            job_match = re.search(r',\s*(.+)', p.text)
-
-            job = job_match.group(1).strip() if job_match else ""
+            job = text.split(",", 1)[-1].strip() if "," in text else ""
 
             participants.append({
-                "degree": degree,
+                "degree": degree_match.group(1) if degree_match else "",
                 "name": bold_name,
                 "job": job
             })
 
     # === 👩‍🏫 Lecturers ===
     lecturers = []
-    collecting = False
     for p in paragraphs:
         if "Mācību semināru vadīs" in p.text:
-            collecting = True
-            continue
+            # Grab the entire paragraph
+            lecturer_line = p.text.split("Mācību semināru vadīs -", 1)[-1]
+            lecturer_segments = [seg.strip() for seg in lecturer_line.split("un")]
 
-        if collecting:
-            bold_name = next((run.text.strip() for run in p.runs if run.bold and run.text.strip()), "")
-            if bold_name:
-                # New lecturer starts here
-                normal_text = " ".join(run.text.strip() for run in p.runs if not run.bold).strip()
+            for segment in lecturer_segments:
+                name_match = re.search(r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+)', segment)
+                name = name_match.group(1) if name_match else "N/A"
+                job = segment.replace(name, "").replace(",", "").strip() if name != "N/A" else segment.strip()
+
                 lecturers.append({
-                    "name": bold_name,
-                    "job": normal_text
+                    "name": name,
+                    "job": job
                 })
-            elif lecturers:
-                # Continue adding to last job description
-                lecturers[-1]["job"] += " " + p.text.strip()
+            break  # Only one line of lecturers expected
 
     return full_datetime, participants, lecturers
 
