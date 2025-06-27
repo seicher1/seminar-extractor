@@ -2,13 +2,13 @@
 <html lang="lv">
 <head>
   <meta charset="UTF-8">
-  <title>Dokumenta Datu Ekstraktors – Meow Meow Industries</title>
+  <title>Dokumentu analīze</title>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <style>
     body {
       font-family: Arial, sans-serif;
       background-color: #121212;
-      color: #ffffff;
+      color: #fff;
       display: flex;
       flex-direction: column;
       align-items: center;
@@ -18,39 +18,39 @@
       color: #ffcc00;
     }
     form {
-      background-color: #1e1e1e;
+      background: #1e1e1e;
       padding: 20px;
-      border-radius: 10px;
+      border-radius: 8px;
       box-shadow: 0 0 10px #333;
       width: 100%;
       max-width: 400px;
     }
     input[type=file] {
       width: 100%;
-      margin-bottom: 20px;
+      margin-bottom: 16px;
     }
     input[type=submit] {
       width: 100%;
-      background-color: #ffcc00;
+      background: #ffcc00;
       color: #000;
       border: none;
-      padding: 10px 0;
+      padding: 12px;
       font-weight: bold;
+      border-radius: 4px;
       cursor: pointer;
-      border-radius: 5px;
     }
     footer {
       margin-top: 40px;
-      font-size: 14px;
       color: #aaa;
+      font-size: 0.9rem;
     }
   </style>
 </head>
 <body>
-  <h1>📄 Dokum. Datu Ekstraktors</h1>
+  <h1>Pavēle to Excel</h1>
   <form action="/upload" method="post" enctype="multipart/form-data">
     <input type="file" name="file" accept=".docx" required>
-    <input type="submit" value="Augšupielādēt un Ekstrahēt">
+    <input type="submit" value="Izvilkt analizētos datus Excel failā!">
   </form>
   <footer>Meow Meow Industries 2025 🐱</footer>
 </body>
