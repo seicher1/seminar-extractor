@@ -3,11 +3,12 @@ from docx import Document
 import pandas as pd
 import re
 import io
+import os
 
 app = Flask(__name__)
 
-def extract_participant_data(doc):
-    # 1) Extract date & time from paragraph 6
+def extract_data(doc):
+    # —─── 1) Date & Time from paragraph 6 ─────────────────────────────
     date_para = doc.paragraphs[6].text.strip()
     date_match = re.search(r'202\d\. gada \d{1,2}\. [a-zāēūī]+', date_para)
     time_match = re.search(
@@ -16,49 +17,70 @@ def extract_participant_data(doc):
     )
     date = date_match.group() if date_match else "N/A"
     time = f"{time_match.group(1)}–{time_match.group(2)}" if time_match else "N/A"
-    datetime_info = f"{date} {time}"
+    full_dt = f"{date} {time}"
 
-    # 2) Collect participants from paragraphs 10 onward until one ends with a dot
-    participants_data = []
+    # —─── 2) Participants from paragraph 10 onward ────────────────────
+    participants = []
     for para in doc.paragraphs[10:]:
         text = para.text.strip()
         if not text:
             continue
 
-        # 2a) Reconstruct bold names in this paragraph
-        bold_names = []
-        buffer = ""
+        # rebuild bold names in this para
+        bolds, buf = [], ""
         for run in para.runs:
             if run.bold:
-                buffer += run.text
-            elif buffer:
-                bold_names.append(buffer.strip())
-                buffer = ""
-        if buffer:
-            bold_names.append(buffer.strip())
+                buf += run.text
+            elif buf:
+                bolds.append(buf.strip())
+                buf = ""
+        if buf:
+            bolds.append(buf.strip())
 
-        # 2b) Split into individual segments by semicolon
-        segments = [seg.strip() for seg in text.split(";") if seg.strip()]
-        for idx, seg in enumerate(segments):
-            # Degree = first word
-            degree = seg.split()[0] if seg.split() else "N/A"
-            # Name = the idx-th bold name
-            name = bold_names[idx] if idx < len(bold_names) else "N/A"
-            # Job = text after “Name,”
-            job = seg.split(f"{name},", 1)[-1].strip(" .") if f"{name}," in seg else "N/A"
+        # split entries on semicolon
+        segs = [s.strip() for s in text.split(";") if s.strip()]
+        for i, seg in enumerate(segs):
+            deg = seg.split()[0] if seg.split() else "N/A"
+            name = bolds[i] if i < len(bolds) else "N/A"
+            job = seg.split(f"{name},",1)[-1].strip(" .") if f"{name}," in seg else "N/A"
+            participants.append({"degree": deg, "participant": name, "pjob": job})
 
-            participants_data.append({
-                "Date": datetime_info,
-                "Degree": degree,
-                "Name": name,
-                "Job": job
-            })
-
-        # Stop at paragraph ending with a period
         if text.endswith("."):
             break
 
-    return pd.DataFrame(participants_data)
+    # —─── 3) Lecturers from the “Mācību semināru vadīs” line ────────
+    lecturers = []
+    for para in doc.paragraphs:
+        if "Mācību semināru vadīs" in para.text:
+            line = para.text.split("Mācību semināru vadīs",1)[-1].strip("–: ")
+            parts = re.split(r'\s+un\s+|,\s*', line)
+            for part in parts:
+                part = part.strip().rstrip(".")
+                # try human name
+                m = re.search(r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+)', part)
+                if m:
+                    nm = m.group(1)
+                    jb = part.replace(nm,"").lstrip(", ").strip()
+                else:
+                    nm = "—"
+                    jb = part
+                lecturers.append({"lecturer": nm, "ljob": jb})
+            break
+
+    # —─── 4) Build rows aligned by index ─────────────────────────────
+    rows = []
+    max_len = max(len(participants), len(lecturers))
+    for i in range(max_len):
+        rows.append({
+            "Date": full_dt if i==0 else "",
+            "Degree": participants[i]["degree"] if i < len(participants) else "",
+            "Participant": participants[i]["participant"] if i < len(participants) else "",
+            "Participant Job": participants[i]["pjob"] if i < len(participants) else "",
+            "Lecturer": lecturers[i]["lecturer"] if i < len(lecturers) else "",
+            "Lecturer Job": lecturers[i]["ljob"] if i < len(lecturers) else "",
+        })
+
+    return pd.DataFrame(rows)
 
 @app.route('/')
 def index():
@@ -66,26 +88,24 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    file = request.files.get('file')
-    if not file or not file.filename.lower().endswith('.docx'):
-        return 'Invalid file format. Please upload a .docx file.', 400
+    f = request.files.get('file')
+    if not f or not f.filename.lower().endswith('.docx'):
+        return 'Lūdzu augšupielādējiet .docx failu.', 400
 
-    # Load and parse
-    doc = Document(file)
-    df = extract_participant_data(doc)
+    doc = Document(f)
+    df = extract_data(doc)
 
-    # Write to Excel in memory
-    output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Participants')
-    output.seek(0)
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Data')
+    out.seek(0)
 
     return send_file(
-        output,
-        download_name='participants.xlsx',
+        out,
+        download_name='seminar_data.xlsx',
         as_attachment=True,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(__import__('os').environ.get('PORT', 10000)), debug=True)
+    app.run(host='0.0.0.0', port=int(os.environ.get('PORT',10000)), debug=True)
