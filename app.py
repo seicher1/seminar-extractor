@@ -81,7 +81,7 @@ def save_to_excel(date_time, participants, lecturers, output_path):
             "Datums un laiks": date_time if i == 0 else "",
             "Pakāpe": participants[i]["degree"] if i < len(participants) else "",
             "Dalībnieks": participants[i]["name"] if i < len(participants) else "",
-            "Amats": participants[i]["job"] if i < len(participants) else "",
+            "Dalībnieka amats": participants[i]["job"] if i < len(participants) else "",
             "Semināra vadītājs": lecturers[i]["name"] if i < len(lecturers) else "",
             "Amats": lecturers[i]["job"] if i < len(lecturers) else ""
         })
