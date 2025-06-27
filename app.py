@@ -4,11 +4,12 @@ import pandas as pd
 import re
 import io
 import os
+from openpyxl.utils import get_column_letter
 
 app = Flask(__name__)
 
 def extract_data(doc):
-    # —─── 1) Date & Time from paragraph 6 ─────────────────────────────
+    # 1) Date & Time from paragraph 6
     date_para = doc.paragraphs[6].text.strip()
     date_match = re.search(r'202\d\. gada \d{1,2}\. [a-zāēūī]+', date_para)
     time_match = re.search(
@@ -19,7 +20,7 @@ def extract_data(doc):
     time = f"{time_match.group(1)}–{time_match.group(2)}" if time_match else "N/A"
     full_dt = f"{date} {time}"
 
-    # —─── 2) Participants from paragraph 10 onward ────────────────────
+    # 2) Participants from paragraph 10 onward
     participants = []
     for para in doc.paragraphs[10:]:
         text = para.text.strip()
@@ -48,7 +49,7 @@ def extract_data(doc):
         if text.endswith("."):
             break
 
-    # —─── 3) Lecturers from the “Mācību semināru vadīs” line ────────
+    # 3) Lecturers from “Mācību semināru vadīs”
     lecturers = []
     for para in doc.paragraphs:
         if "Mācību semināru vadīs" in para.text:
@@ -56,8 +57,10 @@ def extract_data(doc):
             parts = re.split(r'\s+un\s+|,\s*', line)
             for part in parts:
                 part = part.strip().rstrip(".")
-                # try human name
-                m = re.search(r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+)', part)
+                m = re.search(
+                    r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+)',
+                    part
+                )
                 if m:
                     nm = m.group(1)
                     jb = part.replace(nm,"").lstrip(", ").strip()
@@ -67,7 +70,7 @@ def extract_data(doc):
                 lecturers.append({"lecturer": nm, "ljob": jb})
             break
 
-    # —─── 4) Build rows aligned by index ─────────────────────────────
+    # 4) Assemble rows
     rows = []
     max_len = max(len(participants), len(lecturers))
     for i in range(max_len):
@@ -95,9 +98,17 @@ def upload():
     doc = Document(f)
     df = extract_data(doc)
 
+    # Write to Excel with auto column widths
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Data')
+        ws = writer.sheets['Data']
+        for idx, col in enumerate(df.columns, 1):
+            max_length = max(
+                df[col].astype(str).map(len).max(),
+                len(col)
+            ) + 2
+            ws.column_dimensions[get_column_letter(idx)].width = max_length
     out.seek(0)
 
     return send_file(
@@ -108,4 +119,8 @@ def upload():
     )
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT',10000)), debug=True)
+    app.run(
+        host='0.0.0.0',
+        port=int(os.environ.get('PORT', 10000)),
+        debug=True
+    )
