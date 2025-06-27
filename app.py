@@ -1,140 +1,91 @@
-import os
-import re
-import pandas as pd
 from flask import Flask, render_template, request, send_file
-from werkzeug.utils import secure_filename
 from docx import Document
-from openpyxl.styles import Font, PatternFill, Alignment
-from openpyxl.utils import get_column_letter
+import pandas as pd
+import re
+import io
 
 app = Flask(__name__)
-app.config['UPLOAD_FOLDER'] = 'uploads'
-app.config['OUTPUT_FOLDER'] = 'output'
-os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
-os.makedirs(app.config['OUTPUT_FOLDER'], exist_ok=True)
 
-def extract_data_from_docx(filepath):
-    doc = Document(filepath)
-    paragraphs = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-
-    # === 📅 Date & Time ===
-    date_regex = r'202\d\. gada \d{1,2}\. [a-zāēūī]+'
-    time_regex = r'no plkst\.?\s*(\d{1,2}[:.]\d{2})\s*(?:līdz|–)\s*plkst\.?\s*(\d{1,2}[:.]\d{2})'
-
-    date = next((re.search(date_regex, p).group() for p in paragraphs if re.search(date_regex, p)), "N/A")
-    time_match = next((re.search(time_regex, p) for p in paragraphs if re.search(time_regex, p)), None)
+def extract_participant_data(doc):
+    # 1) Extract date & time from paragraph 6
+    date_para = doc.paragraphs[6].text.strip()
+    date_match = re.search(r'202\d\. gada \d{1,2}\. [a-zāēūī]+', date_para)
+    time_match = re.search(
+        r'no plkst\.?\s*(\d{1,2}[:.]\d{2})\s*(?:līdz|–)\s*plkst\.?\s*(\d{1,2}[:.]\d{2})',
+        date_para
+    )
+    date = date_match.group() if date_match else "N/A"
     time = f"{time_match.group(1)}–{time_match.group(2)}" if time_match else "N/A"
-    full_datetime = f"{date} {time}"
+    datetime_info = f"{date} {time}"
 
-    # === 🧍‍♀️ Participants ===
-    participants = []
-    degree_keywords = r"(majore|virsleitnants|kapteinis|inspektors|seržants|leitnants|virsseržants)"
+    # 2) Collect participants from paragraphs 10 onward until one ends with a dot
+    participants_data = []
+    for para in doc.paragraphs[10:]:
+        text = para.text.strip()
+        if not text:
+            continue
 
-    # Find index range of participants block
-    start_idx = end_idx = None
-    for i, p in enumerate(paragraphs):
-        if "Uz mācību semināriem" in p:
-            start_idx = i + 1
-        if "Mācību semināru vadīs" in p:
-            end_idx = i
+        # 2a) Reconstruct bold names in this paragraph
+        bold_names = []
+        buffer = ""
+        for run in para.runs:
+            if run.bold:
+                buffer += run.text
+            elif buffer:
+                bold_names.append(buffer.strip())
+                buffer = ""
+        if buffer:
+            bold_names.append(buffer.strip())
+
+        # 2b) Split into individual segments by semicolon
+        segments = [seg.strip() for seg in text.split(";") if seg.strip()]
+        for idx, seg in enumerate(segments):
+            # Degree = first word
+            degree = seg.split()[0] if seg.split() else "N/A"
+            # Name = the idx-th bold name
+            name = bold_names[idx] if idx < len(bold_names) else "N/A"
+            # Job = text after “Name,”
+            job = seg.split(f"{name},", 1)[-1].strip(" .") if f"{name}," in seg else "N/A"
+
+            participants_data.append({
+                "Date": datetime_info,
+                "Degree": degree,
+                "Name": name,
+                "Job": job
+            })
+
+        # Stop at paragraph ending with a period
+        if text.endswith("."):
             break
 
-    if start_idx is None or end_idx is None:
-        return full_datetime, [], []
+    return pd.DataFrame(participants_data)
 
-    # Combine all participant lines into one text blob
-    participant_blob = " ".join(paragraphs[start_idx:end_idx])
-
-    # Match each participant line
-    pattern = rf"\b{degree_keywords}\b\s+([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][^\s,–]+(?:[- ][A-ZĀČĒĢĪĶĻŅŖŠŪŽ]?[^\s,–]+)*)[,–]\s*(.*?)(?:[;.](?=\s*\b{degree_keywords}\b)|$)"
-    matches = re.finditer(pattern, participant_blob, re.IGNORECASE)
-
-    for m in matches:
-        degree = m.group(1).strip()
-        name = m.group(2).strip()
-        job = m.group(3).strip(" ,;.")
-        participants.append({
-            "degree": degree,
-            "name": name,
-            "job": job
-        })
-
-    # === 👩‍🏫 Lecturers ===
-    lecturers = []
-    for p in paragraphs:
-        if "Mācību semināru vadīs" in p:
-            line = p.split("Mācību semināru vadīs", 1)[-1].strip("–: ")
-            entries = re.split(r'un|,', line)
-            for entry in entries:
-                text = entry.strip()
-                name_match = re.search(r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+)', text)
-                if name_match:
-                    name = name_match.group(1)
-                    job = text.replace(name, "").strip(", ")
-                else:
-                    name = "—"
-                    job = text
-                lecturers.append({
-                    "name": name,
-                    "job": job
-                })
-            break
-
-    return full_datetime, participants, lecturers
-
-
-def save_to_excel(date_time, participants, lecturers, output_path):
-    rows = []
-    max_len = max(len(participants), len(lecturers))
-    for i in range(max_len):
-        rows.append({
-            "Datums un laiks": date_time if i == 0 else "",
-            "Pakāpe": participants[i]["degree"] if i < len(participants) else "",
-            "Dalībnieks": participants[i]["name"] if i < len(participants) else "",
-            "Dalībnieka amats": participants[i]["job"] if i < len(participants) else "",
-            "Semināra vadītājs": lecturers[i]["name"] if i < len(lecturers) else "",
-            "Amats": lecturers[i]["job"] if i < len(lecturers) else ""
-        })
-
-    df = pd.DataFrame(rows)
-    with pd.ExcelWriter(output_path, engine='openpyxl') as writer:
-        df.to_excel(writer, index=False, sheet_name='Seminar Info')
-        ws = writer.sheets['Seminar Info']
-
-        header_font = Font(bold=True, color="FFFFFF")
-        fill = PatternFill("solid", fgColor="4F81BD")
-        align = Alignment(horizontal="center", vertical="center", wrap_text=True)
-
-        for cell in ws[1]:
-            cell.font = header_font
-            cell.fill = fill
-            cell.alignment = align
-
-        for col in ws.columns:
-            max_length = max(len(str(cell.value)) if cell.value else 0 for cell in col) + 2
-            col_letter = get_column_letter(col[0].column)
-            ws.column_dimensions[col_letter].width = max_length
-
-@app.route("/", methods=["GET", "POST"])
+@app.route('/')
 def index():
-    if request.method == "POST":
-        uploaded_file = request.files['file']
-        if not uploaded_file or not uploaded_file.filename.endswith(".docx"):
-            return render_template("index.html", error="Please upload a valid .docx file.")
+    return render_template('index.html')
 
-        filename = secure_filename(uploaded_file.filename)
-        docx_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-        uploaded_file.save(docx_path)
+@app.route('/upload', methods=['POST'])
+def upload():
+    file = request.files.get('file')
+    if not file or not file.filename.lower().endswith('.docx'):
+        return 'Invalid file format. Please upload a .docx file.', 400
 
-        date_time, participants, lecturers = extract_data_from_docx(docx_path)
-        output_path = os.path.join(app.config['OUTPUT_FOLDER'], filename.replace(".docx", ".xlsx"))
-        save_to_excel(date_time, participants, lecturers, output_path)
+    # Load and parse
+    doc = Document(file)
+    df = extract_participant_data(doc)
 
-        return send_file(output_path, as_attachment=True)
+    # Write to Excel in memory
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Participants')
+    output.seek(0)
 
-    return render_template("index.html")
-    
-if __name__ == "__main__":
-    import os
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    return send_file(
+        output,
+        download_name='participants.xlsx',
+        as_attachment=True,
+        mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=int(__import__('os').environ.get('PORT', 10000)), debug=True)
