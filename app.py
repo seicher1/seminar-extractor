@@ -20,46 +20,25 @@ def extract_data(doc):
     time = f"{time_match.group(1)}–{time_match.group(2)}" if time_match else "N/A"
     full_dt = f"{date} {time}"
 
-    # 2) Participants — first try the first table after the “deleģētas” line
+    # 2) Find paragraph containing "deleģētas" and start there
+    start_idx = None
+    for i, para in enumerate(doc.paragraphs):
+        if "deleģētas" in para.text:
+            start_idx = i + 1
+            break
+
     participants = []
-
-    # find the index of the paragraph that contains “deleģētas”
-    start_idx = next((i for i,p in enumerate(doc.paragraphs)
-                      if "deleģētas" in p.text), None)
-
-    # if there's at least one table, assume it's the participants table
-    if doc.tables and start_idx is not None:
-        table = doc.tables[0]
-        for row in table.rows:
-            # join all cells in row into one text blob
-            row_text = " ".join(cell.text.strip() for cell in row.cells).strip()
-            # look for lines starting with numbering 1.x.
-            for match in re.finditer(r'(\d\.\d+)\.\s*(.+)', row_text):
-                # content after the numbering
-                content = match.group(2).strip()
-                # degree = first word
-                parts = content.split(',')
-                # first segment has “Degree Name” separated by space(s)
-                lead = parts[0].strip()
-                deg = lead.split()[0]
-                # name = the next one or two capitalized words
-                name_match = re.match(r'\w+\s+([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+(?:\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)?)', content)
-                name = name_match.group(1) if name_match else "N/A"
-                # job = everything after the comma that follows the name
-                job = content.split(f"{name},",1)[-1].strip() if f"{name}," in content else ""
-                participants.append({
-                    "degree": deg,
-                    "participant": name,
-                    "pjob": job
-                })
-    else:
-        # fallback to old paragraph logic
-        for para in doc.paragraphs[10:]:
+    if start_idx is not None:
+        # Collect until we hit the lecturers section
+        for para in doc.paragraphs[start_idx:]:
             text = para.text.strip()
             if not text:
                 continue
+            # stop if we reach lecturers
             if "Mācību semināru vadīs" in text:
                 break
+
+            # reconstruct bold names
             bolds, buf = [], ""
             for run in para.runs:
                 if run.bold:
@@ -69,14 +48,14 @@ def extract_data(doc):
                     buf = ""
             if buf:
                 bolds.append(buf.strip())
-            segs = [s.strip() for s in text.split(";") if s.strip()]
+
+            # split on semicolon
+            segs = [s.strip() for s in re.split(r';', text) if s.strip()]
             for i, seg in enumerate(segs):
                 deg = seg.split()[0] if seg.split() else "N/A"
-                nm = bolds[i] if i < len(bolds) else "N/A"
-                jb = seg.split(f"{nm},",1)[-1].strip(" .") if f"{nm}," in seg else ""
-                participants.append({"degree": deg, "participant": nm, "pjob": jb})
-            if text.endswith("."):
-                break
+                name = bolds[i] if i < len(bolds) else "N/A"
+                job = seg.split(f"{name},",1)[-1].strip(" .") if f"{name}," in seg else "N/A"
+                participants.append({"degree": deg, "participant": name, "pjob": job})
 
     # 3) Lecturers
     lecturers = []
@@ -99,13 +78,13 @@ def extract_data(doc):
                 lecturers.append({"lecturer": nm, "ljob": jb})
             break
 
-    # 4) Assemble into rows
+    # 4) Build DataFrame rows
     rows = []
     max_len = max(len(participants), len(lecturers))
     for i in range(max_len):
         rows.append({
             "Datums un laiks": full_dt if i==0 else "",
-            "Dienesta pakāpe": participants[i]["degree"] if i < len(participants) else "",
+            "Dalībnieka dienesta pakāpe": participants[i]["degree"] if i < len(participants) else "",
             "Dalībnieks": participants[i]["participant"] if i < len(participants) else "",
             "Dalībnieka amats": participants[i]["pjob"] if i < len(participants) else "",
             "Lektors": lecturers[i]["lecturer"] if i < len(lecturers) else "",
@@ -127,14 +106,13 @@ def upload():
     doc = Document(f)
     df = extract_data(doc)
 
-    # export to Excel with auto column widths
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Data')
         ws = writer.sheets['Data']
         for idx, col in enumerate(df.columns, 1):
-            w = max(df[col].astype(str).map(len).max(), len(col)) + 2
-            ws.column_dimensions[get_column_letter(idx)].width = w
+            max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
+            ws.column_dimensions[get_column_letter(idx)].width = max_len
     out.seek(0)
 
     return send_file(
