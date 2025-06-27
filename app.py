@@ -9,7 +9,7 @@ from openpyxl.utils import get_column_letter
 app = Flask(__name__)
 
 def extract_data(doc):
-    # 1) Date & Time from paragraph 6
+    # iznem datumu un laiku no 6. rindkopas (es nezinu ka sito salabot bet vins strada so)
     date_para = doc.paragraphs[6].text.strip()
     date_match = re.search(r'202\d\. gada \d{1,2}\. [a-zāēūī]+', date_para)
     time_match = re.search(
@@ -20,14 +20,14 @@ def extract_data(doc):
     time = f"{time_match.group(1)}–{time_match.group(2)}" if time_match else "N/A"
     full_dt = f"{date} {time}"
 
-    # 2) Participants from paragraph 10 onward
+    # 2) vinam basically butu jaiet ta, ka vins nem no pirma punkta, es hz bet sitais labak iet
     participants = []
     for para in doc.paragraphs[10:]:
         text = para.text.strip()
         if not text:
             continue
 
-        # rebuild bold names in this para
+        # vins panem bold vardu uzvardu un ieliek vinu excel
         bolds, buf = [], ""
         for run in para.runs:
             if run.bold:
@@ -38,7 +38,7 @@ def extract_data(doc):
         if buf:
             bolds.append(buf.strip())
 
-        # split entries on semicolon
+        # sadala ar semikolu
         segs = [s.strip() for s in text.split(";") if s.strip()]
         for i, seg in enumerate(segs):
             deg = seg.split()[0] if seg.split() else "N/A"
@@ -49,7 +49,7 @@ def extract_data(doc):
         if text.endswith("."):
             break
 
-    # 3) Lecturers from “Mācību semināru vadīs”
+    # lektoru meklesana
     lecturers = []
     for para in doc.paragraphs:
         if "Mācību semināru vadīs" in para.text:
@@ -70,7 +70,7 @@ def extract_data(doc):
                 lecturers.append({"lecturer": nm, "ljob": jb})
             break
 
-    # 4) Assemble rows
+    # saliek rindinas un kolonnas
     rows = []
     max_len = max(len(participants), len(lecturers))
     for i in range(max_len):
@@ -98,7 +98,7 @@ def upload():
     doc = Document(f)
     df = extract_data(doc)
 
-    # Write to Excel with auto column widths
+    # uzliek fully stretched lowkey
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Data')
@@ -117,7 +117,7 @@ def upload():
         as_attachment=True,
         mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
     )
-
+# lai ietu render aplikacija, kad serveri palaizu
 if __name__ == '__main__':
     app.run(
         host='0.0.0.0',
