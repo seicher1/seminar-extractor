@@ -8,7 +8,7 @@ from openpyxl.utils import get_column_letter
 
 app = Flask(__name__)
 
-# Corrected degree keywords (masculine & feminine)
+# Degrees (m+f)
 DEGREES = [
     "ierindnieks","ierindniece",
     "kaprālis","kaprāliene",
@@ -23,14 +23,12 @@ DEGREES = [
     "pulkvedis","pulkvede",
     "ģenerālis","ģenerāle"
 ]
-# Build a regex group for any of the degrees
 DEG_PAT = "(" + "|".join(map(re.escape, DEGREES)) + ")"
 
-# Pattern: 1.x. <degree> <Name Surname>, <job>
 PART_PATTERN = re.compile(
-    rf'\d+\.\d+\.\s*{DEG_PAT}\s+'                    # numbering + degree
-    r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+(?:\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)+))'  # Name Surname
-    r'\s*,\s*([^;]+)',                                # , job text
+    rf'\d+\.\d+\.\s*{DEG_PAT}\s+'                            # 1.x. degree
+    r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+(?:\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)*)'  # Name Surname
+    r'\s*,\s*([^;]+)',                                      # , job up to semicolon
     re.IGNORECASE
 )
 
