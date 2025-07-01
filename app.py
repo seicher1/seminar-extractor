@@ -8,8 +8,8 @@ from openpyxl.utils import get_column_letter
 
 app = Flask(__name__)
 
-# Your exact degree forms
-DEGREES = [
+# Exact degree keywords (m/f)
+DEGREES = {
     "ierindnieks","ierindniece",
     "kaprālis","kaprāliene",
     "seržants","seržante",
@@ -22,122 +22,126 @@ DEGREES = [
     "pulkvežleitnants","pulkvežleitnante",
     "pulkvedis","pulkvede",
     "ģenerālis","ģenerāle"
-]
-# Degree lookup lowercase
-DEG_SET = {d.lower() for d in DEGREES}
+}
 
-# Simplest name matcher: two capitalized words
-NAME_RE = re.compile(r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+(?:\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)+))')
+# Simple name‐matcher: two capitalized words
+NAME_RE = re.compile(r'\b([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)\s+([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)\b')
 
 def extract_data(doc):
-    # –– 1) Date & Time anywhere in doc ––
+    # 1) Extract date & time from anywhere
     full_text = "\n".join(p.text for p in doc.paragraphs)
-    d_m = re.search(r'202\d\. gada \d{1,2}\. [^\n,]+', full_text)
-    t_m = re.search(r'no plkst\.?\s*(\d{1,2}[:.]\d{2})\s*(?:līdz|–)\s*plkst\.?\s*(\d{1,2}[:.]\d{2})', full_text)
-    date = d_m.group().strip() if d_m else "N/A"
-    time = f"{t_m.group(1)}–{t_m.group(2)}" if t_m else "N/A"
-    full_dt = f"{date} {time}"
+    date_m = re.search(r'202\d\. gada \d{1,2}\. [^\n,]+', full_text)
+    time_m = re.search(
+        r'no plkst\.?\s*(\d{1,2}[:.]\d{2})\s*(?:līdz|–)\s*plkst\.?\s*(\d{1,2}[:.]\d{2})',
+        full_text
+    )
+    date_str = date_m.group().strip() if date_m else "N/A"
+    time_str = f"{time_m.group(1)}–{time_m.group(2)}" if time_m else "N/A"
+    full_dt = f"{date_str} {time_str}"
 
-    # –– 2) Gather all lines (paras + table cells) between deleģētas → vadīs ––
-    texts = [p.text.strip() for p in doc.paragraphs]
-    start = next((i for i,t in enumerate(texts) if "deleģētas" in t), None)
-    end1  = next((i for i,t in enumerate(texts) if "Mācību semināru vadīs" in t), None)
-    end2  = next((i for i,t in enumerate(texts) if "Mācības vadīs" in t), None)
+    # 2) Build a list of all relevant lines (paras + table cells) between markers
+    lines = []
+    paras = [p.text.strip() for p in doc.paragraphs]
+    start = next((i for i,t in enumerate(paras) if "deleģētas" in t), None)
+    end1  = next((i for i,t in enumerate(paras) if "Mācību semināru vadīs" in t), None)
+    end2  = next((i for i,t in enumerate(paras) if "Mācības vadīs" in t), None)
     end   = end1 if end1 is not None else end2
-    block_lines = []
-    if start is not None and end is not None and end > start:
-        # paragraphs
-        block_lines = texts[start+1:end]
-    else:
-        block_lines = texts  # fallback full doc
 
-    # include every table cell too
+    if start is not None and end is not None and end > start:
+        lines.extend(paras[start+1:end])
+    else:
+        lines.extend(paras)
+
+    # add all table cell texts
     for table in doc.tables:
         for row in table.rows:
             for cell in row.cells:
                 txt = cell.text.strip()
                 if txt:
-                    block_lines.append(txt)
+                    lines.append(txt)
 
-    # –– 3) Normalize & pair numbering with next line ––
+    # 3) Normalize those lines into complete “entries”
     entries = []
-    skip = False
-    for idx, line in enumerate(block_lines):
-        if skip:
-            skip = False
-            continue
-        # if line is just "1.1." or "2.3." etc
+    i = 0
+    while i < len(lines):
+        line = lines[i].strip()
+        # if a lone numbering line "1.1."
         if re.match(r'^\d+\.\d+\.$', line):
-            # pair with next non-empty
-            for j in range(idx+1, len(block_lines)):
-                nxt = block_lines[j].strip()
-                if nxt:
-                    entries.append(nxt)
-                    skip = True
-                    break
-        else:
-            # if line contains degree keyword, treat as standalone segment
-            low = line.lower()
-            if any(d in low for d in DEG_SET):
-                entries.append(line)
+            # grab next non-empty line
+            j = i + 1
+            while j < len(lines) and not lines[j].strip():
+                j += 1
+            if j < len(lines):
+                entries.append(lines[j].strip())
+            i = j + 1
+            continue
+        # if this line itself contains a degree keyword, treat as complete
+        low = line.lower()
+        first_word = low.split()[0] if low else ""
+        if first_word in DEGREES:
+            entries.append(line)
+        i += 1
 
-    # –– 4) Parse each entry for degree, name, job ––
+    # 4) Parse each entry into degree, name, job
     participants = []
     for seg in entries:
         parts = seg.split()
-        deg = ""
-        if parts and parts[0].lower() in DEG_SET:
-            deg = parts[0]
-        # find name
-        nm = ""
-        m = NAME_RE.search(seg)
-        if m:
-            nm = m.group(1)
-        # job = after comma
-        jb = ""
-        if ',' in seg and nm:
-            jb = seg.split(f"{nm},",1)[-1].strip()
-        participants.append({"degree": deg, "participant": nm, "pjob": jb})
+        degree = parts[0] if parts and parts[0].lower() in DEGREES else ""
+        # name via NAME_RE
+        name = ""
+        nm = NAME_RE.search(seg)
+        if nm:
+            name = f"{nm.group(1)} {nm.group(2)}"
+        # job = text after the first comma
+        job = ""
+        if ',' in seg and name:
+            job = seg.split(f"{name},", 1)[1].strip()
+        participants.append({
+            "degree": degree,
+            "participant": name,
+            "pjob": job
+        })
 
-    # –– 5) Lecturers (unchanged) ––
+    # 5) Extract lecturers
     lecturers = []
     for p in doc.paragraphs:
-        if "Mācību semināru vadīs" in p.text or "Mācības vadīs" in p.text:
-            tail = re.split(r'Mācību semināru vadīs|Mācības vadīs', p.text,1)[-1]
+        text = p.text.strip()
+        if "Mācību semināru vadīs" in text or "Mācības vadīs" in text:
+            tail = re.split(r'Mācību semināru vadīs|Mācības vadīs', text, 1)[-1]
+            # split on “ un ” or comma before capital
             parts = re.split(r'\s+un\s+|,\s*(?=[A-ZĀČĒĢĪĶĻŅŖŠŪŽ])', tail)
             for part in parts:
                 t = part.strip().rstrip(".;")
-                m = NAME_RE.match(t)
-                if m:
-                    nm = m.group(1)
-                    jb = t.replace(nm,"").lstrip(", ").strip()
+                nm = NAME_RE.match(t)
+                if nm:
+                    lecturer = f"{nm.group(1)} {nm.group(2)}"
+                    job = t.replace(lecturer, "").lstrip(", ").strip()
                 else:
-                    nm, jb = "—", t
-                lecturers.append({"lecturer": nm, "ljob": jb})
+                    lecturer, job = "—", t
+                lecturers.append({"lecturer": lecturer, "ljob": job})
             break
 
-    # –– 6) Build DataFrame with auto‐fit columns ––
+    # 6) Build DataFrame and write to Excel in-memory
     rows = []
     L = max(len(participants), len(lecturers))
-    for i in range(L):
+    for idx in range(L):
         rows.append({
-            "Date": full_dt if i==0 else "",
-            "Degree": participants[i]["degree"]    if i<L else "",
-            "Participant": participants[i]["participant"] if i<L else "",
-            "Participant Job": participants[i]["pjob"] if i<L else "",
-            "Lecturer": lecturers[i]["lecturer"] if i<L else "",
-            "Lecturer Job": lecturers[i]["ljob"]  if i<L else ""
+            "Date": full_dt if idx == 0 else "",
+            "Degree": participants[idx]["degree"]    if idx < len(participants) else "",
+            "Participant": participants[idx]["participant"] if idx < len(participants) else "",
+            "Participant Job": participants[idx]["pjob"] if idx < len(participants) else "",
+            "Lecturer": lecturers[idx]["lecturer"] if idx < len(lecturers) else "",
+            "Lecturer Job": lecturers[idx]["ljob"]  if idx < len(lecturers) else ""
         })
-    df = pd.DataFrame(rows)
 
-    # autofit
+    df = pd.DataFrame(rows)
     output = io.BytesIO()
-    with pd.ExcelWriter(output, engine='openpyxl') as w:
-        df.to_excel(w, index=False, sheet_name='Data')
-        ws = w.sheets['Data']
-        for idx,col in enumerate(df.columns,1):
-            mx = df[col].astype(str).map(len).max()
-            ws.column_dimensions[get_column_letter(idx)].width = max(mx, len(col)) + 2
+    with pd.ExcelWriter(output, engine='openpyxl') as writer:
+        df.to_excel(writer, index=False, sheet_name='Data')
+        ws = writer.sheets['Data']
+        for col_idx, col in enumerate(df.columns, 1):
+            width = max(df[col].astype(str).map(len).max(), len(col)) + 2
+            ws.column_dimensions[get_column_letter(col_idx)].width = width
     output.seek(0)
     return output
 
