@@ -26,7 +26,10 @@ DEGREES = {
 }
 
 # Name matcher: two capitalized words, hyphens allowed
-NAME_RE = re.compile(r"\b([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\wāčēģīķļņšžūŗĀČĒĢĪĶĻŅŖŠŪŽŅŖŠŪŽ\-–]+)\s+([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\wāčēģīķļņšžūŗĀČĒĢĪĶĻŅŖŠŪŽŅŖŠŪŽ\-–]+))\b")
+NAME_RE = re.compile(
+    r"\b([^\W\d_][\w\-]+)\s+([^\W\d_][\w\-]+)\b",
+    re.UNICODE
+)
 
 # Helper regex
 NUM_ONLY = re.compile(r"^\d+\.\d+\.$")
