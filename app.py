@@ -108,12 +108,12 @@ def extract_data(doc):
     max_len = max(len(participants), len(lecturers))
     for i in range(max_len):
         rows.append({
-            "Date": full_dt if i == 0 else "",
-            "Degree": participants[i]["degree"] if i < len(participants) else "",
-            "Participant": participants[i]["participant"] if i < len(participants) else "",
-            "Participant Job": participants[i]["pjob"] if i < len(participants) else "",
-            "Lecturer": lecturers[i]["lecturer"] if i < len(lecturers) else "",
-            "Lecturer Job": lecturers[i]["ljob"] if i < len(lecturers) else "",
+            "Datums un laiks": full_dt if i == 0 else "",
+            "Dalībnieka dienesta pakāpe": participants[i]["degree"] if i < len(participants) else "",
+            "Dalībnieks": participants[i]["participant"] if i < len(participants) else "",
+            "Dalībnieka amats": participants[i]["pjob"] if i < len(participants) else "",
+            "Lektors": lecturers[i]["lecturer"] if i < len(lecturers) else "",
+            "Lektora amats": lecturers[i]["ljob"] if i < len(lecturers) else "",
         })
 
     return pd.DataFrame(rows)
