@@ -23,12 +23,22 @@ DEGREES = [
     "pulkvedis","pulkvede",
     "ģenerālis","ģenerāle"
 ]
-DEG_PAT = "(" + "|".join(map(re.escape, DEGREES)) + ")"
 
+# Build a non-capturing group for all degrees
+deg_group = r'(?:' + '|'.join(re.escape(d) for d in DEGREES) + r')'
+
+# One big raw regex:
+#   \d+\.\d+\.      → 1.x.
+#   \s*<degree>\s+  → your degree keyword
+#   ([A-Z...]+)     → capture Name Surname
+#   \s*,\s*([^;]+)  → comma + capture job until semicolon
 PART_PATTERN = re.compile(
-    rf'\d+\.\d+\.\s*{DEG_PAT}\s+'                            # 1.x. degree
-    r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+(?:\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)*)'  # Name Surname
-    r'\s*,\s*([^;]+)',                                      # , job up to semicolon
+    r'\d+\.\d+\.\s*' +
+    deg_group +
+    r'\s+' +
+    r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+(?:\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)+)' +
+    r'\s*,\s*' +
+    r'([^;]+)',
     re.IGNORECASE
 )
 
