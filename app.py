@@ -8,9 +8,7 @@ from openpyxl.utils import get_column_letter
 
 app = Flask(__name__)
 
-import re
-
-# Your corrected degree list
+# Correct degree keywords (masculine & feminine)
 DEGREES = [
     "ierindnieks","ierindniece",
     "kaprālis","kaprāliene",
@@ -26,79 +24,80 @@ DEGREES = [
     "ģenerālis","ģenerāle"
 ]
 
-# Build a non‐capturing group for all degrees
+# Build non-capturing group for degrees
 deg_group = r'(?:' + '|'.join(map(re.escape, DEGREES)) + r')'
 
-# Now the participant regex:
-# 1) \d+\.\d+\.     → matches "1.1.", "2.3." etc
-# 2) \s*(<degree>)  → captures one of your keywords
-# 3) \s+([A-Z…]+)   → captures Name Surname (two capitalized words)
-# 4) \s*,\s*([^;\n]+) → captures the job up to the next semicolon or line break
-PART_PATTERN = re.compile(
-    r'\d+\.\d+\.\s*' +                # numbering
-    '(' + deg_group + r')' +         #  (1) degree
-    r'\s+' +
-    r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+(?:\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)+)' +  # (2) Name Surname
-    r'\s*,\s*' +
-    r'([^;\n]+)',                     # (3) job description
+# 1) Pattern to grab every “1.x.” or “2.x.” segment up to semicolon:
+#    Group 1 = degree, Group 2 = the rest of the segment
+ENTRY_PATTERN = re.compile(
+    r'\d+\.\d+\.\s*(' + deg_group + r')\s*([^;]+)',
     re.IGNORECASE
 )
 
+# 2) Name matcher (two capitalized words)
+NAME_PATTERN = re.compile(
+    r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+(?:\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)+)',
+    re.IGNORECASE
+)
 
 def extract_data(doc):
-    # 1) Date & Time
-    all_text = "\n".join(p.text for p in doc.paragraphs)
-    date_m = re.search(r'202\d\. gada \d{1,2}\. [^\n,]+', all_text)
+    # ── A) Extract full text and date/time ──────────────────────
+    full_text = "\n".join(p.text for p in doc.paragraphs)
+    date_m = re.search(r'202\d\. gada \d{1,2}\. [^\n,]+', full_text)
     time_m = re.search(
         r'no plkst\.?\s*(\d{1,2}[:.]\d{2})\s*(?:līdz|–)\s*plkst\.?\s*(\d{1,2}[:.]\d{2})',
-        all_text
+        full_text
     )
     date = date_m.group().strip() if date_m else "N/A"
     time = f"{time_m.group(1)}–{time_m.group(2)}" if time_m else "N/A"
     full_dt = f"{date} {time}"
 
-    # 2) Extract block between "deleģētas" and lecturers marker
+    # ── B) Extract block between “deleģētas” and lecturers marker ──
     texts = [p.text for p in doc.paragraphs]
     start = next((i for i,t in enumerate(texts) if "deleģētas" in t), None)
     end1  = next((i for i,t in enumerate(texts) if "Mācību semināru vadīs" in t), None)
     end2  = next((i for i,t in enumerate(texts) if "Mācības vadīs" in t), None)
     end   = end1 if end1 is not None else end2
-    block = ""
     if start is not None and end is not None and end > start:
         block = " ".join(texts[start+1:end])
     else:
-        block = all_text
+        block = full_text  # fallback
 
-    # 3) Participants via regex
+    # ── C) Parse participants via ENTRY_PATTERN ────────────────
     participants = []
-    for m in PART_PATTERN.finditer(block):
+    for m in ENTRY_PATTERN.finditer(block):
+        degree = m.group(1).strip()
+        seg_rest = m.group(2).strip()
+        # Extract name
+        name_m = NAME_PATTERN.search(seg_rest)
+        name = name_m.group(1).strip() if name_m else ""
+        # Extract job = text after the name comma
+        job = seg_rest.split(',',1)[1].strip() if ',' in seg_rest else ""
         participants.append({
-            "degree": m.group(1),
-            "participant": m.group(2),
-            "pjob": m.group(3).strip()
+            "degree": degree,
+            "participant": name,
+            "pjob": job
         })
 
-    # 4) Lecturers
+    # ── D) Parse lecturers ───────────────────────────────────────
     lecturers = []
     for p in doc.paragraphs:
         if "Mācību semināru vadīs" in p.text or "Mācības vadīs" in p.text:
             tail = re.split(r'Mācību semināru vadīs|Mācības vadīs', p.text, 1)[-1]
             parts = re.split(r'\s+un\s+|,\s*(?=[A-ZĀČĒĢĪĶĻŅŖŠŪŽ])', tail)
             for part in parts:
-                text = part.strip().rstrip(".;")
-                m = re.match(
-                    r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+(?:\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)+))',
-                    text
-                )
-                if m:
-                    nm = m.group(1)
-                    jb = text.replace(nm, "").lstrip(", ").strip()
+                t = part.strip().rstrip(".;")
+                # Reuse NAME_PATTERN to capture lecturer name
+                nm_m = NAME_PATTERN.match(t)
+                if nm_m:
+                    nm = nm_m.group(1)
+                    jb = t.replace(nm, "").lstrip(", ").strip()
                 else:
-                    nm, jb = "—", text
+                    nm, jb = "—", t
                 lecturers.append({"lecturer": nm, "ljob": jb})
             break
 
-    # 5) Assemble DataFrame with auto-fit columns later
+    # ── E) Build rows and return DataFrame ───────────────────────
     rows = []
     length = max(len(participants), len(lecturers))
     for i in range(length):
@@ -131,8 +130,8 @@ def upload():
         df.to_excel(writer, index=False, sheet_name='Data')
         ws = writer.sheets['Data']
         for idx, col in enumerate(df.columns, 1):
-            w = max(df[col].astype(str).map(len).max(), len(col)) + 2
-            ws.column_dimensions[get_column_letter(idx)].width = w
+            max_len = max(df[col].astype(str).map(len).max(), len(col)) + 2
+            ws.column_dimensions[get_column_letter(idx)].width = max_len
     out.seek(0)
 
     return send_file(
