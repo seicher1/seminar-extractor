@@ -9,145 +9,153 @@ from openpyxl.utils import get_column_letter
 
 app = Flask(__name__)
 
-# Degree keywords
 DEGREES = {
-    "ierindnieks","ierindniece",
-    "kaprālis","kaprāliene",
-    "seržants","seržante",
-    "virsseržants","virsseržante",
-    "virsniekvietnieks","virsniekvietniece",
-    "leitnants","leitnante",
-    "virsleitnants","virsleitnante",
-    "kapteinis","kapteine",
-    "majors","majore",
-    "pulkvežleitnants","pulkvežleitnante",
-    "pulkvedis","pulkvede",
+    "ierindnieks","ierindniece","kaprālis","kaprāliene","seržants","seržante",
+    "virsseržants","virsseržante","virsniekvietnieks","virsniekvietniece",
+    "leitnants","leitnante","virsleitnants","virsleitnante","kapteinis","kapteine",
+    "majors","majore","pulkvežleitnants","pulkvežleitnante","pulkvedis","pulkvede",
     "ģenerālis","ģenerāle"
 }
 
-# Simple name matcher for lecturers (two words)
-NAME_RE = re.compile(r"\b([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w\-]+)\s+([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w\-]+)\b")
+# Simple two-word name matcher (for fallback)
+NAME_RE = re.compile(r'\b([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)\s+([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)\b')
 
-# Helper regex
-NUM_ONLY = re.compile(r"^\d+\.\d+\.$")
-DATE_RE = re.compile(r"202\d\. gada \d{1,2}\. [^\n,]+")
-TIME_RE = re.compile(r"no plkst\.?\s*(\d{1,2}[:.]\d{2})\s*(?:līdz|–)\s*plkst\.?\s*(\d{1,2}[:.]\d{2})")
-
+NUM_ONLY = re.compile(r'^\d+\.\d+\.$')
+DATE_RE = re.compile(r'202\d\. gada \d{1,2}\. [^\n,]+')
+TIME_RE = re.compile(r'no plkst\.?\s*(\d{1,2}[:.]\d{2})\s*(?:līdz|–)\s*plkst\.?\s*(\d{1,2}[:.]\d{2})')
 
 def extract_data(doc):
-    # 1) Date & Time
+    # 1) Date & time
     full_text = "\n".join(p.text for p in doc.paragraphs)
-    date_m = DATE_RE.search(full_text)
-    time_m = TIME_RE.search(full_text)
-    date_str = date_m.group().strip() if date_m else "N/A"
-    time_str = f"{time_m.group(1)}–{time_m.group(2)}" if time_m else "N/A"
+    d = DATE_RE.search(full_text)
+    t = TIME_RE.search(full_text)
+    date_str = d.group().strip() if d else "N/A"
+    time_str = f"{t.group(1)}–{t.group(2)}" if t else "N/A"
     full_dt = f"{date_str} {time_str}"
 
-    # 2) Participants block
+    # 2) Collect participant lines
     paras = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
-    start = next((i for i,t in enumerate(paras) if "deleģētas" in t), None)
+    start = next((i for i,v in enumerate(paras) if "deleģētas" in v), None)
     end = None
     if start is not None:
         for j in range(start+1, len(paras)):
-            if "vadīs" in paras[j]: end = j; break
-    segment_lines = paras[start+1:end] if start is not None and end else paras
+            if "vadīs" in paras[j]:
+                end = j
+                break
+    seg_lines = paras[start+1:end] if start is not None and end else paras[:]
+    # include table cells
     for tbl in doc.tables:
         for row in tbl.rows:
             for cell in row.cells:
                 txt = cell.text.strip()
-                if txt: segment_lines.append(txt)
+                if txt:
+                    seg_lines.append(txt)
 
-    # 3) Normalize entries
+    # normalize to entries
     entries = []
     i = 0
-    while i < len(segment_lines):
-        ln = segment_lines[i]
+    while i < len(seg_lines):
+        ln = seg_lines[i]
         if NUM_ONLY.match(ln):
             k = i+1
-            while k < len(segment_lines) and not segment_lines[k].strip(): k+=1
-            if k < len(segment_lines): entries.append(segment_lines[k].strip())
-            i = k+1; continue
-        first = ln.split()[0].lower()
-        if first in DEGREES: entries.append(ln)
+            while k < len(seg_lines) and not seg_lines[k].strip():
+                k += 1
+            if k < len(seg_lines):
+                entries.append(seg_lines[k].strip())
+            i = k+1
+            continue
+        fw = ln.split()[0].lower() if ln.split() else ""
+        if fw in DEGREES:
+            entries.append(ln)
         i += 1
 
-    # 4) Parse participants with new name logic
+    # parse participants
     participants = []
     for seg in entries:
         parts = seg.split()
         deg = parts[0] if parts and parts[0].lower() in DEGREES else ""
-        # substring between degree and comma is full name
-        name = ""
-        job = ""
-        if deg:
-            rem = seg[len(deg):].strip()
-            if ',' in rem:
-                name_part, job_part = rem.split(',', 1)
-                name = name_part.strip()
-                job = job_part.strip()
-            else:
-                name = rem
+        rem = seg[len(deg):].strip() if deg else seg
+        if ',' in rem:
+            name, job = map(str.strip, rem.split(',',1))
         else:
-            # fallback: before comma
+            name, job = rem, ""
+        participants.append({"degree":deg, "participant":name, "pjob":job})
+
+    # 3) Extract lecturers
+    lecturers = []
+    for p in doc.paragraphs:
+        txt = p.text.strip()
+        if "vadīs" not in txt:
+            continue
+        # take the part after 'vadīs'
+        tail = re.split(r'vadīs[:\-]?', txt, 1, flags=re.IGNORECASE)[-1]
+        # split multiple lecturers
+        for seg in re.split(r';|\s+un\s+', tail):
+            seg = seg.strip().rstrip('.;')
+            if not seg:
+                continue
             if ',' in seg:
                 name, job = map(str.strip, seg.split(',',1))
             else:
-                name = seg
-        participants.append({'degree':deg,'participant':name,'pjob':job})
-
-    # 5) Extract lecturers using regex across all "vadīs" lines
-    lecturers = []
-    for para in doc.paragraphs:
-        text = para.text.strip()
-        if 'vadīs' in text:
-            # tail after 'vadīs'
-            tail = re.split(r'vadīs[:\-]?', text, 1, flags=re.IGNORECASE)[-1]
-            # find all Name Surname, job pairs up to semicolon
-            for m in re.finditer(
-                r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\\w–]+(?:\\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\\w–]+)+)),\\s*([^;]+)',
-                tail
-            ):
-                name = m.group(1).strip()
-                job = m.group(2).strip()
-                lecturers.append({'lecturer': name, 'ljob': job})
-    # remove duplicates
+                # fallback: try two-word match
+                m = NAME_RE.search(seg)
+                if m:
+                    name = f"{m.group(1)} {m.group(2)}"
+                    job = seg.replace(name, "").lstrip(", ").strip()
+                else:
+                    name, job = seg, ""
+            lecturers.append({"lecturer":name, "ljob":job})
+    # dedupe while preserving order
     seen = set()
     uniq = []
     for lec in lecturers:
-        key = (lec['lecturer'], lec['ljob'])
+        key = (lec["lecturer"], lec["ljob"])
         if key not in seen:
             seen.add(key)
             uniq.append(lec)
     lecturers = uniq
 
-    # 6) Build rows
-    rows=[]
-    for i,(p,l) in enumerate(zip_longest(participants,lecturers,fillvalue={})):  
+    # 4) Build rows
+    rows = []
+    for idx, (p, l) in enumerate(zip_longest(participants, lecturers, fillvalue={})):
         rows.append({
-            'Date': full_dt if i==0 else '',
-            'Degree':p.get('degree',''),
-            'Participant':p.get('participant',''),
-            'Participant Job':p.get('pjob',''),
-            'Lecturer':l.get('lecturer',''),
-            'Lecturer Job':l.get('ljob','')
+            "Date": full_dt if idx==0 else "",
+            "Degree": p.get("degree",""),
+            "Participant": p.get("participant",""),
+            "Participant Job": p.get("pjob",""),
+            "Lecturer": l.get("lecturer",""),
+            "Lecturer Job": l.get("ljob",""),
         })
-    df=pd.DataFrame(rows)
+    df = pd.DataFrame(rows)
 
-    # 7) Excel export
-    out=io.BytesIO()
-    with pd.ExcelWriter(out,engine='openpyxl') as w:
-        df.to_excel(w,index=False,sheet_name='Data');ws=w.sheets['Data']
-        for ci,col in enumerate(df.columns,1):
-            mx=df[col].astype(str).map(len).max();ws.column_dimensions[get_column_letter(ci)].width=max(mx,len(col))+2
-    out.seek(0); return out
+    # 5) Export to Excel
+    out = io.BytesIO()
+    with pd.ExcelWriter(out, engine="openpyxl") as writer:
+        df.to_excel(writer, index=False, sheet_name="Data")
+        ws = writer.sheets["Data"]
+        for ci, col in enumerate(df.columns, 1):
+            mx = df[col].astype(str).map(len).max()
+            ws.column_dimensions[get_column_letter(ci)].width = max(mx, len(col)) + 2
+    out.seek(0)
+    return out
 
-@app.route('/')
+@app.route("/")
+def index():
+    return render_template("index.html")
 
-def index(): return render_template('index.html')
-@app.route('/upload',methods=['POST'])
+@app.route("/upload", methods=["POST"])
 def upload():
-    f=request.files.get('file')
-    if not f or not f.filename.lower().endswith('.docx'): return 'Upload .docx',400
-    excel=extract_data(Document(f)); return send_file(excel,download_name='seminar_data.xlsx',as_attachment=True,mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+    f = request.files.get("file")
+    if not f or not f.filename.lower().endswith(".docx"):
+        return "Please upload a .docx file", 400
+    doc = Document(f)
+    excel_io = extract_data(doc)
+    return send_file(
+        excel_io,
+        download_name="seminar_data.xlsx",
+        as_attachment=True,
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
-if __name__=='__main__': app.run(host='0.0.0.0',port=int(os.environ.get('PORT',10000)),debug=True)
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=int(os.environ.get("PORT",10000)), debug=True)
