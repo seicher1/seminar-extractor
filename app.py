@@ -8,118 +8,103 @@ from openpyxl.utils import get_column_letter
 
 app = Flask(__name__)
 
-# List of degree keywords including masculine and feminine forms
+# Degrees (m+f variants)
 DEGREES = [
-    "ierindnieks", "ierindniece",
-    "kaprālis", "kaprāliene",
-    "seržants", "seržante",
-    "virsseržants", "virsseržante",
-    "virsnieka vietnieks", "virsnieces vietniece",
-    "leitnants", "leitnante",
-    "virsleitnants", "virsleitnante",
-    "kapteinis", "kapteiniene",
-    "majors", "majore",
-    "pulkvežleitnants", "pulkvežleitnante",
-    "pulkvedis", "pulkvede",
-    "ģenerālis", "ģenerāliene"
+    "ierindnieks","ierindniece",
+    "kaprālis","kaprāliene",
+    "seržants","seržante",
+    "virsseržants","virsseržante",
+    "virsnieka vietnieks","virsnieces vietniece",
+    "leitnants","leitnante",
+    "virsleitnants","virsleitnante",
+    "kapteinis","kapteiniene",
+    "majors","majore",
+    "pulkvežleitnants","pulkvežleitnante",
+    "pulkvedis","pulkvede",
+    "ģenerālis","ģenerāliene"
 ]
-DEGREE_PATTERN = r"\b(?:" + "|".join(map(re.escape, DEGREES)) + r")\b"
-
+DEG_PAT = r"(?:{})(?=\s)".format("|".join(map(re.escape, DEGREES)))
 
 def extract_data(doc):
-    # 1) Extract date & time from the first paragraph containing a date
-    first_text = next((p.text for p in doc.paragraphs if re.search(r'202\d\. gada', p.text)), "")
-    date_match = re.search(r'202\d\. gada \d{1,2}\. [a-zāēūī]+', first_text)
-    time_match = re.search(
-        r'no plkst\.?\s*(\d{1,2}[:.]\d{2})\s*(?:līdz|–)\s*plkst\.?\s*(\d{1,2}[:.]\d{2})',
-        first_text
-    )
-    date = date_match.group() if date_match else "N/A"
-    time = f"{time_match.group(1)}–{time_match.group(2)}" if time_match else "N/A"
+    # ── 1) Date & Time ────────────────────────────────────────────
+    all_text = "\n".join(p.text for p in doc.paragraphs)
+    date_m = re.search(r'202\d\. gada \d{1,2}\. [^\n,]+', all_text)
+    time_m = re.search(r'no plkst\.?\s*(\d{1,2}[:.]\d{2})\s*(?:līdz|–)\s*plkst\.?\s*(\d{1,2}[:.]\d{2})', all_text)
+    date = date_m.group().strip() if date_m else "N/A"
+    time = f"{time_m.group(1)}–{time_m.group(2)}" if time_m else "N/A"
     full_dt = f"{date} {time}"
 
-    # 2) Participants between 'deleģētas' and 'Mācību semināru vadīs'
-    start_idx = next((i for i, p in enumerate(doc.paragraphs) if "deleģētas" in p.text), None)
-    end_idx = next((i for i, p in enumerate(doc.paragraphs) if "Mācību semināru vadīs" in p.text), None)
+    # ── 2) Slice out the participants block ──────────────────────
+    texts = [p.text for p in doc.paragraphs]
+    start = next((i for i,t in enumerate(texts) if "deleģētas" in t), None)
+    end1  = next((i for i,t in enumerate(texts) if "Mācību semināru vadīs" in t), None)
+    end2  = next((i for i,t in enumerate(texts) if "Mācības vadīs" in t), None)
+    end   = end1 if end1 is not None else end2
+    block = ""
+    if start is not None and end is not None and end > start:
+        block = " ".join(texts[start+1:end])
+    else:
+        block = all_text  # fallback to everything
+
+    # ── 3) Regex‐extract **all** numbered participants in that block ──
+    pattern = re.compile(
+        rf'\d+\.\d+\.\s*({DEG_PAT})\s+'                           # degree
+        r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+(?:\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)+))'  # Name Surname
+        r'\s*,\s*([^;]+)'                                          # job up to semicolon
+        , re.IGNORECASE
+    )
 
     participants = []
-    if start_idx is not None and end_idx is not None:
-        for para in doc.paragraphs[start_idx+1:end_idx]:
-            text = para.text.strip()
-            if not text:
-                continue
-            # reconstruct bold names in this paragraph
-            bolds, buf = [], ""
-            for run in para.runs:
-                if run.bold:
-                    buf += run.text
-                elif buf:
-                    bolds.append(buf.strip())
-                    buf = ""
-            if buf:
-                bolds.append(buf.strip())
+    for m in pattern.finditer(block):
+        deg  = m.group(1)
+        name = m.group(2)
+        job  = m.group(3).strip()
+        participants.append({"degree": deg, "participant": name, "pjob": job})
 
-            # split segments by semicolon
-            segments = [seg.strip() for seg in text.split(';') if seg.strip()]
-            bindex = 0
-            for seg in segments:
-                if not re.search(DEGREE_PATTERN, seg, re.IGNORECASE):
-                    continue
-                deg_m = re.search(DEGREE_PATTERN, seg, re.IGNORECASE)
-                degree = deg_m.group(0) if deg_m else ""
-                name = bolds[bindex] if bindex < len(bolds) else ""
-                bindex += 1
-                job = seg.split(f"{name},", 1)[-1].strip(" .") if name and f"{name}," in seg else seg
-                participants.append({"degree": degree, "participant": name, "pjob": job})
-
-    # 3) Lecturers extraction
+    # ── 4) Lecturers ──────────────────────────────────────────────
     lecturers = []
-    for para in doc.paragraphs:
-        if "Mācību semināru vadīs" in para.text:
-            tail = para.text.split("Mācību semināru vadīs", 1)[-1].strip("–: ")
-            parts = re.split(r'\s+un\s+|,\s*', tail)
+    for p in doc.paragraphs:
+        if "Mācību semināru vadīs" in p.text or "Mācības vadīs" in p.text:
+            tail = re.split(r'Mācību semināru vadīs|Mācības vadīs', p.text, 1)[-1]
+            parts = re.split(r'\s+un\s+|,\s*(?=[A-ZĀČĒĢĪĶĻŅŖŠŪŽ])', tail)
             for part in parts:
-                part = part.strip().rstrip(". ")
-                # fixed regex: no extra parenthesis
-                m = re.search(r"([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][a-zāčēģīķļņŗšūž]+)", part)
-                if m:
-                    nm = m.group(1)
+                part = part.strip().rstrip(".;")
+                name_m = re.match(r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+(?:\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)+))', part)
+                if name_m:
+                    nm = name_m.group(1)
                     jb = part.replace(nm, "").lstrip(", ").strip()
                 else:
-                    nm = "—"
-                    jb = part
+                    nm, jb = "—", part
                 lecturers.append({"lecturer": nm, "ljob": jb})
             break
 
-    # 4) Assemble DataFrame
+    # ── 5) Build DataFrame ────────────────────────────────────────
     rows = []
-    max_len = max(len(participants), len(lecturers))
-    for i in range(max_len):
+    L = max(len(participants), len(lecturers))
+    for i in range(L):
         rows.append({
-            "Date": full_dt if i == 0 else "",
-            "Degree": participants[i]["degree"] if i < len(participants) else "",
-            "Participant": participants[i]["participant"] if i < len(participants) else "",
-            "Participant Job": participants[i]["pjob"] if i < len(participants) else "",
-            "Lecturer": lecturers[i]["lecturer"] if i < len(lecturers) else "",
-            "Lecturer Job": lecturers[i]["ljob"] if i < len(lecturers) else "",
+            "Date": full_dt if i==0 else "",
+            "Degree": participants[i]["degree"]    if i<len(participants) else "",
+            "Participant": participants[i]["participant"] if i<len(participants) else "",
+            "Participant Job": participants[i]["pjob"] if i<len(participants) else "",
+            "Lecturer": lecturers[i]["lecturer"] if i<len(lecturers) else "",
+            "Lecturer Job": lecturers[i]["ljob"]  if i<len(lecturers) else "",
         })
 
     return pd.DataFrame(rows)
 
 @app.route('/')
-
 def index():
     return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
-
 def upload():
     f = request.files.get('file')
     if not f or not f.filename.lower().endswith('.docx'):
         return 'Lūdzu augšupielādējiet .docx failu.', 400
 
     doc = Document(f)
-    df = extract_data(doc)
+    df  = extract_data(doc)
 
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine='openpyxl') as writer:
