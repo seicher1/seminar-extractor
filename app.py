@@ -95,30 +95,30 @@ def extract_data(doc):
                 name = seg
         participants.append({'degree':deg,'participant':name,'pjob':job})
 
-    # 5) Extract lecturers after participants
-    last_par = 0
-    for idx,p in enumerate(doc.paragraphs):
-        if any(p.text.strip().startswith(f"{n}.") for n in range(1,10)): last_par=idx
-    lecturers=[]
-    for p in doc.paragraphs[last_par+1:]:
-        t=p.text.strip()
-        if not t or 'vadīs' not in t: continue
-        tail = re.split(r'vadīs[:\-]?', t,1,flags=re.IGNORECASE)[-1]
-        for part in re.split(r';|\s+un\s+', tail):
-            ent = part.strip().rstrip('.;')
-            if not ent: continue
-            nm=''; jb=''
-            if ',' in ent:
-                nm, jb = map(str.strip, ent.split(',',1))
-            else:
-                nm = ent
-            lecturers.append({'lecturer':nm,'ljob':jb})
-    # dedupe
-    seen=set(); uniq=[]
+    # 5) Extract lecturers using regex across all "vadīs" lines
+    lecturers = []
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if 'vadīs' in text:
+            # tail after 'vadīs'
+            tail = re.split(r'vadīs[:\-]?', text, 1, flags=re.IGNORECASE)[-1]
+            # find all Name Surname, job pairs up to semicolon
+            for m in re.finditer(
+                r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\\w–]+(?:\\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\\w–]+)+)),\\s*([^;]+)',
+                tail
+            ):
+                name = m.group(1).strip()
+                job = m.group(2).strip()
+                lecturers.append({'lecturer': name, 'ljob': job})
+    # remove duplicates
+    seen = set()
+    uniq = []
     for lec in lecturers:
-        key=(lec['lecturer'],lec['ljob'])
-        if key not in seen: seen.add(key); uniq.append(lec)
-    lecturers=uniq
+        key = (lec['lecturer'], lec['ljob'])
+        if key not in seen:
+            seen.add(key)
+            uniq.append(lec)
+    lecturers = uniq
 
     # 6) Build rows
     rows=[]
