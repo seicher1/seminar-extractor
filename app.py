@@ -4,8 +4,8 @@ import pandas as pd
 import re
 import io
 import os
-from openpyxl.utils import get_column_letter
 from itertools import zip_longest
+from openpyxl.utils import get_column_letter
 
 app = Flask(__name__)
 
@@ -95,28 +95,60 @@ def extract_data(doc):
             name = f"{m.group(1)} {m.group(2)}"
         # extract job
         job = ""
-        if ',' in remainder:
-            after = remainder.split(',',1)[1].strip()
-            job = after
+        if ',' in remainder and name:
+            job = remainder.split(f"{name},",1)[1].strip()
         participants.append({'degree':deg, 'participant':name, 'pjob':job})
 
-    # 5) Extract lecturers
+    # Determine index of last participant paragraph
+    last_para_idx = 0
+    for idx, p in enumerate(doc.paragraphs):
+        if any(p.text.strip().startswith(f"{i}.") for i in range(1,10)):
+            last_para_idx = idx
+
+    # 5) Extract lecturers: new logic to find all 'vadīs' after participants
     lecturers = []
-    for p in doc.paragraphs:
-        t = p.text.strip()
-        if "Mācību semināru vadīs" in t or "Mācības vadīs" in t:
-            tail = re.split(r'Mācību semināru vadīs|Mācības vadīs', t, 1)[-1]
-            parts = re.split(r'\s+un\s+|,\s*(?=[A-ZĀČĒĢĪĶĻŅŖŠŪŽ])', tail)
+    for para in doc.paragraphs[last_para_idx+1:]:
+        t = para.text.strip()
+        if not t:
+            continue
+        if "vadīs" in t:
+            # tail after 'vadīs'
+            tail = re.split(r'vadīs[:\-]?', t, 1, flags=re.IGNORECASE)[-1]
+            # split entries by semicolon or 'un'
+            parts = re.split(r';|\s+un\s+', tail)
             for part in parts:
-                txt = part.strip().rstrip('.;')
-                m = NAME_RE.match(txt)
+                ptxt = part.strip().rstrip('.;')
+                # extract name and job
+                nm = ""
+                jb = ""
+                m = NAME_RE.search(ptxt)
                 if m:
                     nm = f"{m.group(1)} {m.group(2)}"
-                    jb = txt.replace(nm, '').lstrip(', ').strip()
+                    jb = ptxt.split(f"{nm},",1)[1].strip() if f"{nm}," in ptxt else ptxt.replace(nm,'').strip(' ,')
                 else:
-                    nm, jb = '—', txt
+                    # fallback: first comma-separated
+                    if ',' in ptxt:
+                        nm, jb = ptxt.split(',',1)
+                        nm, jb = nm.strip(), jb.strip()
+                    else:
+                        nm, jb = ptxt, ''
                 lecturers.append({'lecturer':nm, 'ljob':jb})
-            break
+
+    # Also include old lecturer extraction (pre-2025 variant)
+    for para in doc.paragraphs:
+        t = para.text.strip()
+        if "semināru vadīs" in t and ':' not in t:
+            tail = re.split(r'semināru vadīs', t,1, flags=re.IGNORECASE)[-1]
+            parts = re.split(r';|\s+un\s+', tail)
+            for part in parts:
+                ptxt = part.strip().rstrip('.;')
+                nm = ''
+                jb = ''
+                m = NAME_RE.search(ptxt)
+                if m:
+                    nm = f"{m.group(1)} {m.group(2)}"
+                    jb = ptxt.split(f"{nm},",1)[1].strip() if f"{nm}," in ptxt else ptxt.replace(nm,'').strip(' ,')
+                lecturers.append({'lecturer':nm, 'ljob':jb})
 
     # 6) Assemble rows
     rows = []
@@ -131,23 +163,24 @@ def extract_data(doc):
         })
 
     df = pd.DataFrame(rows)
-    # 7) Write to Excel with auto-fit
+    # 7) Write to Excel with auto-fit columns
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Data')
         ws = writer.sheets['Data']
-        for ci, col in enumerate(df.columns, 1):
-            maxlen = df[col].astype(str).map(len).max()
-            width = max(maxlen, len(col)) + 2
-            ws.column_dimensions[get_column_letter(ci)].width = width
+        for ci, col in enumerate(df.columns,1):
+            mx = df[col].astype(str).map(len).max()
+            ws.column_dimensions[get_column_letter(ci)].width = max(mx, len(col)) + 2
     output.seek(0)
     return output
 
 @app.route('/')
+
 def index():
     return render_template('index.html')
 
 @app.route('/upload', methods=['POST'])
+
 def upload():
     f = request.files.get('file')
     if not f or not f.filename.lower().endswith('.docx'):
