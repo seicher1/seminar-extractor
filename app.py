@@ -6,16 +6,12 @@ import io
 import os
 from itertools import zip_longest
 from openpyxl.utils import get_column_letter
-
-# Required imports for parsing order of elements
-from docx.oxml.table import CT_Tbl
-from docx.oxml.text.paragraph import CT_P
 from docx.table import Table
 from docx.text.paragraph import Paragraph
 
 app = Flask(__name__)
 
-# Degree keywords (exact forms)
+# Degrees (exact forms)
 DEGREES = {
     "ierindnieks","ierindniece","kaprālis","kaprāliene",
     "seržants","seržante","virsseržants","virsseržante",
@@ -25,7 +21,7 @@ DEGREES = {
     "pulkvedis","pulkvede","ģenerālis","ģenerāle"
 }
 
-# Fallback name matcher
+# Simple lecturer name fallback
 NAME_RE = re.compile(r"\b([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)\s+([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)\b")
 
 # Date/time patterns
@@ -38,10 +34,10 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload():
-    f = request.files.get('file')
-    if not f or not f.filename.lower().endswith('.docx'):
+    file = request.files.get('file')
+    if not file or not file.filename.lower().endswith('.docx'):
         return 'Please upload a .docx file', 400
-    doc = Document(f)
+    doc = Document(file)
 
     # 1) Extract date & time
     full_text = "\n".join(p.text for p in doc.paragraphs)
@@ -51,51 +47,79 @@ def upload():
     time_str = f"{tm.group(1)}–{tm.group(2)}" if tm else 'N/A'
     full_dt = f"{date_str} {time_str}"
 
-    # 2) Extract participants in document order using attendance headings + tables
+    # 2) Participants parsing: tables first
     participants = []
     current_attendance = ''
-    # Iterate body elements to preserve order
+    # Flow through document elements to capture attendance and tables
     for child in doc.element.body.iterchildren():
-        tag = child.tag.split('}')[1]
+        tag = child.tag.split('}')[-1]
         if tag == 'p':
             para = Paragraph(child, doc)
             text = para.text.strip()
-            # Check for attendance headings
-            m = re.match(r"^\d+\.\s*Piedalīties.*\((klātienē|attālināti)\)", text, re.IGNORECASE)
-            if m:
-                current_attendance = m.group(1).lower()
+            # detect attendance headings
+            if 'Piedalīties' in text:
+                low = text.lower()
+                if 'klātienē' in low:
+                    current_attendance = 'klātienē'
+                elif 'attālināti' in low:
+                    current_attendance = 'attālināti'
         elif tag == 'tbl':
             table = Table(child, doc)
             for row in table.rows:
-                # Expect numbering in first cell
                 num = row.cells[0].text.strip()
-                if not re.match(r"^\d+\.\d+", num):
+                if not re.match(r'^\d+\.\d+', num):
                     continue
                 seg = row.cells[1].text.strip()
-                # Degree = first word if in DEGREES
                 parts = seg.split()
                 deg = parts[0] if parts and parts[0].lower() in DEGREES else ''
-                # Name: substring between degree and comma
                 rem = seg[len(deg):].strip() if deg else seg
                 if ',' in rem:
                     name, job = map(str.strip, rem.split(',',1))
                 else:
                     name, job = rem, ''
                 participants.append({
-                    'Date': full_dt,
-                    'Degree': deg,
-                    'Participant': name,
-                    'Participant Job': job,
-                    'Attendance': current_attendance
+                    'date': full_dt,
+                    'degree': deg,
+                    'participant': name,
+                    'pjob': job,
+                    'attendance': current_attendance
                 })
+    # 3) Fallback paragraph-based extraction if no participants from tables
+    if not participants:
+        paras = [p.text.strip() for p in doc.paragraphs if p.text.strip()]
+        start = next((i for i,v in enumerate(paras) if 'deleģētas' in v), None)
+        end = next((i for i,v in enumerate(paras) if 'vadīs' in v), None)
+        block = paras[start+1:end] if start is not None and end is not None else paras
+        for para_text in block:
+            segs = re.split(r';', para_text)
+            for seg in segs:
+                seg = seg.strip().rstrip('.;')
+                if not seg:
+                    continue
+                first = seg.split()[0].lower()
+                if first in DEGREES:
+                    parts = seg.split()
+                    deg = parts[0]
+                    rem = seg[len(deg):].strip()
+                    if ',' in rem:
+                        name, job = map(str.strip, rem.split(',',1))
+                    else:
+                        name, job = rem, ''
+                    participants.append({
+                        'date': full_dt,
+                        'degree': deg,
+                        'participant': name,
+                        'pjob': job,
+                        'attendance': ''
+                    })
 
-    # 3) Extract lecturers anywhere in doc
+    # 4) Lecturers extraction
     lecturers = []
     for para in doc.paragraphs:
         text = para.text.strip()
         if 'vadīs' not in text:
             continue
-        tail = re.split(r'vadīs[:\-]?', text, 1, flags=re.IGNORECASE)[-1]
+        tail = re.split(r'vadīs[:\-]?', text,1, flags=re.IGNORECASE)[-1]
         for seg in re.split(r';|\s+un\s+', tail):
             ent = seg.strip().rstrip('.;')
             if not ent:
@@ -109,36 +133,36 @@ def upload():
                     job = ent.replace(name,'').lstrip(', ').strip()
                 else:
                     name, job = ent, ''
-            lecturers.append({'Lecturer': name, 'Lecturer Job': job})
-    # Deduplicate lecturers maintaining order
-    seen = set(); unique_lect=[]
+            lecturers.append({'lecturer':name,'ljob':job})
+    # dedupe lecturers
+    seen = set(); uniq=[]
     for lec in lecturers:
-        key=(lec['Lecturer'],lec['Lecturer Job'])
+        key=(lec['lecturer'],lec['ljob'])
         if key not in seen:
-            seen.add(key); unique_lect.append(lec)
-    lecturers = unique_lect
+            seen.add(key); uniq.append(lec)
+    lecturers = uniq
 
-    # 4) Combine participants and lecturers
+    # 5) Build DataFrame rows
     rows = []
     for i, p in enumerate(participants):
-        lec = lecturers[i] if i < len(lecturers) else {'Lecturer':'','Lecturer Job':''}
+        lec = lecturers[i] if i < len(lecturers) else {'lecturer':'','ljob':''}
         rows.append({
-            'Date': p['Date'] if i==0 else '',
-            'Degree': p['Degree'],
-            'Participant': p['Participant'],
-            'Participant Job': p['Participant Job'],
-            'Attendance': p['Attendance'],
-            'Lecturer': lec['Lecturer'],
-            'Lecturer Job': lec['Lecturer Job']
+            'Date': p.get('date','') if i==0 else '',
+            'Degree': p.get('degree',''),
+            'Participant': p.get('participant',''),
+            'Participant Job': p.get('pjob',''),
+            'Attendance': p.get('attendance',''),
+            'Lecturer': lec.get('lecturer',''),
+            'Lecturer Job': lec.get('ljob','')
         })
     df = pd.DataFrame(rows)
 
-    # 5) Export to Excel
+    # 6) Export to Excel
     out = io.BytesIO()
     with pd.ExcelWriter(out, engine='openpyxl') as writer:
         df.to_excel(writer, index=False, sheet_name='Data')
         ws = writer.sheets['Data']
-        for idx, col in enumerate(df.columns, 1):
+        for idx, col in enumerate(df.columns,1):
             w = max(df[col].astype(str).map(len).max(), len(col)) + 2
             ws.column_dimensions[get_column_letter(idx)].width = w
     out.seek(0)
