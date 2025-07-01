@@ -8,7 +8,9 @@ from openpyxl.utils import get_column_letter
 
 app = Flask(__name__)
 
-# Degrees (m+f)
+import re
+
+# Your corrected degree list
 DEGREES = [
     "ierindnieks","ierindniece",
     "kaprālis","kaprāliene",
@@ -24,23 +26,24 @@ DEGREES = [
     "ģenerālis","ģenerāle"
 ]
 
-# Build a non-capturing group for all degrees
-deg_group = r'(?:' + '|'.join(re.escape(d) for d in DEGREES) + r')'
+# Build a non‐capturing group for all degrees
+deg_group = r'(?:' + '|'.join(map(re.escape, DEGREES)) + r')'
 
-# One big raw regex:
-#   \d+\.\d+\.      → 1.x.
-#   \s*<degree>\s+  → your degree keyword
-#   ([A-Z...]+)     → capture Name Surname
-#   \s*,\s*([^;]+)  → comma + capture job until semicolon
+# Now the participant regex:
+# 1) \d+\.\d+\.     → matches "1.1.", "2.3." etc
+# 2) \s*(<degree>)  → captures one of your keywords
+# 3) \s+([A-Z…]+)   → captures Name Surname (two capitalized words)
+# 4) \s*,\s*([^;\n]+) → captures the job up to the next semicolon or line break
 PART_PATTERN = re.compile(
-    r'\d+\.\d+\.\s*' +
-    deg_group +
+    r'\d+\.\d+\.\s*' +                # numbering
+    '(' + deg_group + r')' +         #  (1) degree
     r'\s+' +
-    r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+(?:\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)+)' +
+    r'([A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+(?:\s+[A-ZĀČĒĢĪĶĻŅŖŠŪŽ][\w–]+)+)' +  # (2) Name Surname
     r'\s*,\s*' +
-    r'([^;]+)',
+    r'([^;\n]+)',                     # (3) job description
     re.IGNORECASE
 )
+
 
 def extract_data(doc):
     # 1) Date & Time
